@@ -173,16 +173,19 @@ def cmd_characterize(args) -> int:
         for g in manifest.gaps:
             print(f"  - {g}")
 
-    unavailable = sorted({f"{r.channel.channel_id}: {r.reason}"
-                          for cs in result.channels.values()
-                          for _, r in cs if not r.available})
-    if unavailable:
-        print("\nchannels that could not be scored:")
-        for u in unavailable:
+    notes = sorted({f"{r.channel.channel_id}: {r.reason}"
+                    for cs in result.channels.values()
+                    for _, r in cs if r.reason})
+    if notes:
+        print("\nchannels that could not be scored, or scored nothing:")
+        for u in notes:
             print(f"  - {u}")
 
-    print(f"\n=== literature exposure, top {100 - args.candidate_percentile:g}% "
-          "of this die per channel ===")
+    print(f"\n=== literature exposure, at or above the "
+          f"{args.candidate_percentile:g}th percentile per channel ===")
+    print("  (ties share a rank, so a channel whose input takes few distinct "
+          "values can report nothing and say so rather than choose among "
+          "identical cells)")
     if result.candidates.empty:
         print("  no candidate regions")
     else:

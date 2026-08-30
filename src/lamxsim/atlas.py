@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 from . import exposure, registry
+from .pipeline import _covers, _fmt, _is_roi
 from .features import gradient as grad_mod
 from .features.bump_relative import extract as bump_relative_extract
 from .features.crosslayer import LayerStack, extract as crosslayer_extract
@@ -115,6 +116,19 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
     geometry_bbox = reader.bbox()
     die_bbox = manifest.die_bbox(reader)
 
+    # The same contract the correlation pipeline enforces. Without it a die
+    # outline that does not contain the layout is accepted and every
+    # die-relative quantity -- centre, normalised position, bump radial
+    # direction, corner context -- is measured from a frame that does not
+    # exist.
+    if not _covers(die_bbox, geometry_bbox):
+        raise ValueError(
+            f"the declared die outline {_fmt(die_bbox)} does not contain the "
+            f"loaded geometry {_fmt(geometry_bbox)}. One of them is wrong, and "
+            "every die-relative channel depends on which.")
+    roi_without_outline = (not manifest.die_outline_um
+                           and _is_roi(die_bbox, geometry_bbox))
+
     grids = build_multiscale(geometry_bbox, manifest.scales_um)
     frames, channels, candidate_rows = [], {}, []
 
@@ -140,6 +154,10 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
                 scale_channels.append((owner, result))
                 if not result.available:
                     continue
+                note = exposure.tie_compression_note(result, candidate_percentile)
+                if note:
+                    result.reason = ((result.reason + "; ") if result.reason
+                                     else "") + note
                 pct = result.percentile
                 flagged = np.where(np.isfinite(pct)
                                    & (pct >= candidate_percentile))[0]
@@ -152,6 +170,10 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
                         "x_um": cell.x_center, "y_um": cell.y_center,
                         "percentile_in_die": round(float(pct[i]), 2),
                         "inputs_used": ";".join(result.inputs_used),
+                        "triggered_by": (str(result.triggering_input[i])
+                                         if result.triggering_input is not None
+                                         else ""),
+                        "conditioned_on": result.channel.conditional_on,
                         "references": ";".join(result.channel.references),
                         "mechanism": result.channel.mechanism,
                         "two_sided": result.channel.two_sided,
@@ -174,6 +196,7 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
         "die_bbox_um": [die_bbox.xmin, die_bbox.ymin,
                         die_bbox.xmax, die_bbox.ymax],
         "die_outline_declared": bool(manifest.die_outline_um),
+        "die_relative_channels_disabled": bool(roi_without_outline),
         "scales_um": sorted(grids),
         "candidate_percentile": candidate_percentile,
         "manifest": manifest.report(),
@@ -241,8 +264,41 @@ def _traceability(atlas: Atlas) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+#: Observables the literature varies that a GDS does contain, and that this
+#: repository has not implemented. Keeping them apart from the genuinely
+#: unavailable physics matters: one list is work, the other is a limit.
+UNIMPLEMENTED_GDS_OBSERVABLES = (
+    ("bump geometry", "bump diameter, area, aspect ratio and placement angle",
+     "li2025beol_design_factors",
+     "varied directly in the 2025 study; recoverable from the bump layer"),
+    ("bump geometry", "explicit outermost / critical-bump identity",
+     "li2023beol_failure_locations",
+     "the global loading is placed here before layers are compared"),
+    ("PI opening", "opening diameter, area, aspect ratio and orientation",
+     "li2025beol_design_factors",
+     "varied directly in the 2025 study; recoverable from the PI layer"),
+    ("pad", "pad overlap fraction and pad/bump/PI concentricity",
+     "rabie2018cpi", "pad geometry is one of the listed levers"),
+    ("crackstop", "rail width, double-rail, segmentation and corner topology",
+     "rabie2018cpi", "the crackstop lever is about its structure, not its "
+     "distance"),
+    ("top metal", "die-corner metal tile density",
+     "rabie2018cpi", "the first lever in the paper"),
+    ("wide metal", "wide-metal extent and slotting as exposure channels",
+     "rabie2018cpi", "extracted as features, not yet scored as channels"),
+)
+
+
+def _unimplemented_observables() -> pd.DataFrame:
+    return pd.DataFrame([
+        {"area": area, "observable": observable, "reference": ref,
+         "recoverable_from_gds": True, "why_it_matters": why,
+         "status": "not implemented"}
+        for area, observable, ref, why in UNIMPLEMENTED_GDS_OBSERVABLES])
+
+
 def _unsupported_physics(atlas: Atlas) -> pd.DataFrame:
-    """Per channel, what a GDS cannot supply and what it would change."""
+    """Per channel, what no GDS can supply and what its absence costs."""
     rows = []
     for channel in exposure.CHANNELS:
         for quantity in channel.unsupported_physics:
@@ -360,9 +416,16 @@ def write(atlas: Atlas, outdir: str | Path, manifest) -> dict[str, str]:
     _traceability(atlas).to_csv(p, index=False)
     paths["literature_traceability"] = str(p)
 
-    p = out / "unsupported_physics.csv"
+    p = out / "unsupported_non_gds_physics.csv"
     _unsupported_physics(atlas).to_csv(p, index=False)
     paths["unsupported_physics"] = str(p)
+
+    # Separated deliberately: "the GDS has it and we have not implemented it"
+    # is a backlog, and "no GDS contains it" is a limit. Filing the first
+    # under the second makes the tool look more bounded than it is.
+    p = out / "unimplemented_gds_observables.csv"
+    _unimplemented_observables().to_csv(p, index=False)
+    paths["unimplemented_gds_observables"] = str(p)
 
     overlay = {}
     if not atlas.candidates.empty:

@@ -173,6 +173,7 @@ def test_the_outputs_state_what_the_atlas_is_not(study, built, tmp_path):
         assert claim in text
     assert set(paths) >= {"feature_maps", "literature_candidates",
                           "literature_traceability", "unsupported_physics",
+                          "unimplemented_gds_observables",
                           "candidate_regions", "assumptions_and_limits"}
 
 
@@ -191,7 +192,7 @@ def test_traceability_links_every_channel_input_to_the_registry(study, built,
 def test_unsupported_physics_is_listed_per_channel(study, built, tmp_path):
     gds, manifest, _ = study
     atlas.write(built, tmp_path, manifest)
-    gaps = pd.read_csv(tmp_path / "unsupported_physics.csv")
+    gaps = pd.read_csv(tmp_path / "unsupported_non_gds_physics.csv")
     assert set(gaps.channel) == {c.channel_id for c in exposure.CHANNELS}
     assert (~gaps.recoverable_from_gds).all()
     assert "EMC thickness" in set(gaps.quantity)

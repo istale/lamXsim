@@ -1,0 +1,28 @@
+{
+  "overlay_layers": {
+    "cross_layer_mismatch": 200,
+    "layout_transition": 201,
+    "perimeter_at_matched_density": 202,
+    "pi_opening_proximity": 203,
+    "routing_in_bump_frame": 204,
+    "termination": 205,
+    "via_architecture": 206
+  },
+  "scales_um": [
+    100.0,
+    250.0
+  ],
+  "candidate_percentile": 95.0,
+  "die_bbox_um": [
+    0.0,
+    0.0,
+    1500.0,
+    1500.0
+  ],
+  "geometry_bbox_um": [
+    0.0,
+    0.0,
+    1500.0,
+    1500.0
+  ]
+}

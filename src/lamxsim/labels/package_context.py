@@ -36,6 +36,7 @@ FEATURES = (
     "bump_radial_offset",
     "bump_tangential_offset",
     "bump_radial_direction_rad",
+    "nearest_bump_distance_from_die_center",
     "local_bump_pitch",
     "bump_count_density",
     "under_bump_indicator",
@@ -168,6 +169,11 @@ def extract(grid, die_bbox: BBox, reader: LayoutReader,
         # The direction package-induced shear grows along at this location,
         # kept as an angle so layout orientation can be resolved against it.
         out["bump_radial_direction_rad"] = np.arctan2(uy, ux) % np.pi
+        # How far out this cell's nearest bump sits. Li et al. (2023) locate
+        # the global loading at the bumps farthest from the die centre and
+        # only then compare the layers beneath them, so "which bump" has to be
+        # available before that conditioning can be applied.
+        out["nearest_bump_distance_from_die_center"] = norm
 
         # Local pitch from the nearest-neighbour spacing of the bump this cell
         # belongs to, so a die with a non-uniform bump map is described
@@ -185,6 +191,7 @@ def extract(grid, die_bbox: BBox, reader: LayoutReader,
     else:
         for k in ("distance_to_nearest_bump", "bump_radial_offset",
                   "bump_tangential_offset", "bump_radial_direction_rad",
+                  "nearest_bump_distance_from_die_center",
                   "local_bump_pitch", "bump_count_density",
                   "under_bump_indicator"):
             out[k] = np.full(n, np.nan)

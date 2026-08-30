@@ -1,0 +1,8 @@
+area,observable,reference,recoverable_from_gds,why_it_matters,status
+bump geometry,"bump diameter, area, aspect ratio and placement angle",li2025beol_design_factors,True,varied directly in the 2025 study; recoverable from the bump layer,not implemented
+bump geometry,explicit outermost / critical-bump identity,li2023beol_failure_locations,True,the global loading is placed here before layers are compared,not implemented
+PI opening,"opening diameter, area, aspect ratio and orientation",li2025beol_design_factors,True,varied directly in the 2025 study; recoverable from the PI layer,not implemented
+pad,pad overlap fraction and pad/bump/PI concentricity,rabie2018cpi,True,pad geometry is one of the listed levers,not implemented
+crackstop,"rail width, double-rail, segmentation and corner topology",rabie2018cpi,True,"the crackstop lever is about its structure, not its distance",not implemented
+top metal,die-corner metal tile density,rabie2018cpi,True,the first lever in the paper,not implemented
+wide metal,wide-metal extent and slotting as exposure channels,rabie2018cpi,True,"extracted as features, not yet scored as channels",not implemented
