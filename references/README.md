@@ -1,5 +1,10 @@
 # Literature Foundation — lamXsim GDS Delamination Correlation Engine
 
+For the engineering interpretation of these papers - including the causal
+chain, current code coverage, GDS-only limits and the work a human owner must
+take over - read the
+[first-principles engineering guide](../docs/first_principles_engineering.md).
+
 Generated 2026-08-29. Availability verified against OpenAlex, Unpaywall and
 Semantic Scholar. **No paywall was circumvented.**
 

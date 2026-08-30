@@ -61,13 +61,20 @@ class LineEnd:
 
 
 def _edge_walk(region: db.Region):
-    """Yield (prev_len, edge, next_len, convex_start, convex_end) per edge."""
+    """Yield per-edge geometry with convexity judged from the metal side.
+
+    Hole rings are flipped, as in corner classification, so that convexity
+    means the same thing everywhere. The consequence is deliberate: the end
+    of a slot cut into metal is bounded by re-entrant corners and is therefore
+    not reported as a line end. A terminated routing tip and a slot end are
+    different mechanical objects, and Tan (2008) observed the former.
+    """
     for poly in region.each():
-        for pts in _rings(poly):
+        for pts, is_hole in _rings(poly):
             n = len(pts)
             if n < 4:
                 continue
-            s = _orientation(pts)
+            s = _orientation(pts) * (-1 if is_hole else 1)
 
             def convex(i):
                 a, b, c = pts[i - 1], pts[i], pts[(i + 1) % n]

@@ -130,3 +130,25 @@ def test_generated_eps_keeps_a_factor_two_margin():
     layer = CalibreLayer("M8", 8, 0, min_width_um=0.2)
     assert layer.eps_um < layer.min_width_um / 2
     assert (layer.min_width_um / 2) / layer.eps_um == pytest.approx(2.0)
+
+
+def test_corner_correction_is_exact_on_a_shape_with_a_hole(tmp_path):
+    """A ring exercises the hole branch of the corner classification.
+
+    Every other benchmark shape here is simply connected, so a hole ring whose
+    corner types were inverted would pass all of them. On this ring the wrong
+    classification gives 8 convex and 0 concave instead of 4 and 4, and the
+    correction term is off by 8*eps.
+    """
+    sl = synth.SynthLayout()
+    synth.bench_ring(sl, 8, outer=60.0, wall=10.0)
+    path = tmp_path / "ring.gds"
+    sl.write(str(path))
+    r = LayoutReader(str(path)).region(M)
+
+    n_convex, n_concave = corners.counts(r)
+    assert (n_convex, n_concave) == (4, 4)
+
+    eps_dbu = int(0.1 / DBU)
+    assert corners.corrected_band_perimeter(r, eps_dbu, DBU) == pytest.approx(
+        _exact(r), rel=1e-9)

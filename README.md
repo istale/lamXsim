@@ -1,8 +1,21 @@
 # lamXsim — GDS Spatial Delamination Correlation Engine
 
-**Status: Phase 0 + thin vertical slice.** One layer, two features, full
-statistical pipeline, validated end to end against ground truth. Not a
-delamination predictor, and not yet a full feature catalogue.
+**Status: GDS-first research prototype + thin vertical slice.** The real-data
+CLI currently analyzes one layer; the library extracts metal density,
+perimeter, line ends, orientation and gradients, with synthetic validation of
+cross-layer and statistical behavior. It is not a delamination predictor or a
+qualified design-rule generator.
+
+## Engineering interpretation
+
+lamXsim is deliberately GDS-first. It uses literature to turn layout geometry
+into testable engineering hypotheses; it does not pretend that GDS contains
+package material properties, thermal history, interface toughness or
+inspection sensitivity. Read the
+[first-principles engineering guide](docs/first_principles_engineering.md)
+before applying the pipeline to measured failures. It maps each literature
+claim to its GDS proxy, current code coverage, required human input and the
+conclusions the evidence does not yet support.
 
 ## Why this shape
 
@@ -433,8 +446,11 @@ are Phase 6 and need real failure data. Sections 19–23 (ConvNeXt, VLM,
 hotspots, back-annotation) stay closed until Phase 6 shows deterministic
 geometry carries signal.
 
-**Not built and needed before Phase 4:** a registration module (fiducial
-transform + residual reporting) and a bump/C4 map input. Every layout lever in
-Rabie et al. (2018) is defined relative to die corners and bumps, so without a
-bump map the engine cannot reproduce effects the literature already documents.
-`position_sigma_um` is currently declared by the user rather than measured.
+**Still needed for the real-data path:** bump/C4, pad and PI-opening semantics
+when those layers are available, plus a CLI workflow that applies the fitted
+registration to a failure CSV before analysis. Every layout lever in Rabie et
+al. (2018) is defined relative to die corners and bumps, so without bump context
+the engine cannot reproduce effects the literature already documents. The
+registration library now fits a transform and estimates uncertainty honestly,
+but `lamxsim register` currently writes the fit report rather than a registered
+failure table.

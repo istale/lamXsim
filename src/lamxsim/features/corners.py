@@ -17,9 +17,9 @@ import numpy as np
 
 
 def _rings(polygon):
-    yield list(polygon.each_point_hull())
+    yield list(polygon.each_point_hull()), False
     for h in range(polygon.holes()):
-        yield list(polygon.each_point_hole(h))
+        yield list(polygon.each_point_hole(h)), True
 
 
 def _orientation(pts) -> int:
@@ -33,16 +33,21 @@ def _orientation(pts) -> int:
 def classify(region: db.Region) -> tuple[list, list]:
     """Return (convex_points, concave_points) in database units.
 
-    Orientation is resolved per ring from its signed area, so holes -- which
-    wind the opposite way -- do not have their corner types inverted.
+    Convexity is judged **with respect to the metal**, not with respect to the
+    ring being walked. Two normalisations are needed for that: the ring's own
+    winding, taken from its signed area, and then a flip for hole rings.
+    A hole's corner that is convex in its own winding is re-entrant seen from
+    the material around it -- and re-entrant corners are the
+    stress-concentrating case, so getting this backwards would report a seal
+    ring or any enclosing metal as having no concave corners at all.
     """
     convex, concave = [], []
     for poly in region.each():
-        for pts in _rings(poly):
+        for pts, is_hole in _rings(poly):
             n = len(pts)
             if n < 3:
                 continue
-            s = _orientation(pts)
+            s = _orientation(pts) * (-1 if is_hole else 1)
             for i in range(n):
                 a, b, c = pts[i - 1], pts[i], pts[(i + 1) % n]
                 cross = s * ((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x))

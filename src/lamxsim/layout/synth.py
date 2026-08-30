@@ -404,3 +404,76 @@ def crosslayer_driver_die(path: str, *, die_um: float = 2000.0,
                   pitch=pitch_um, density=density, vertical=bool(lower[j, i]))
     sl.write(path)
     return path, mismatch
+
+
+def bump_array(sl: SynthLayout, layer: int, die_um: float, *, pitch: float,
+               size: float, margin: float = 100.0, pi_layer: int | None = None,
+               pi_ratio: float = 0.7):
+    """A regular C4/bump field, optionally with a PI opening inside each bump.
+
+    Returns the bump centres in um. Bumps are the boundary condition through
+    which the package loads the layout, so a synthetic die that is meant to
+    exercise package-position confounding needs them present rather than
+    implied by distance-to-corner alone.
+    """
+    import numpy as np
+    centres = []
+    n = int((die_um - 2 * margin) // pitch) + 1
+    for j in range(n):
+        for i in range(n):
+            cx = margin + i * pitch
+            cy = margin + j * pitch
+            if cx + size / 2 > die_um or cy + size / 2 > die_um:
+                continue
+            h = size / 2
+            sl.add_box(layer, cx - h, cy - h, cx + h, cy + h)
+            if pi_layer is not None:
+                hp = size * pi_ratio / 2
+                sl.add_box(pi_layer, cx - hp, cy - hp, cx + hp, cy + hp)
+            centres.append((cx, cy))
+    return np.array(centres, dtype=float)
+
+
+def crackstop_ring(sl: SynthLayout, layer: int, die_um: float, *,
+                   inset: float = 20.0, width: float = 8.0):
+    """A seal-ring/crackstop frame just inside the die outline."""
+    a, b = inset, die_um - inset
+    sl.add_box(layer, a, a, b, a + width)
+    sl.add_box(layer, a, b - width, b, b)
+    sl.add_box(layer, a, a, a + width, b)
+    sl.add_box(layer, b - width, a, b, b)
+
+
+def packaged_die(path: str, *, die_um: float = 3000.0, block_um: float = 100.0,
+                 seed: int = 31, bump_pitch: float = 400.0,
+                 bump_size: float = 150.0):
+    """A validation die carrying metal, vias, bumps, PI openings and a crackstop.
+
+    Layer map: 8 = M8, 7 = M7, 17 = V7, 60 = bump, 61 = PI opening,
+    62 = crackstop. Structured like a real delivery so that package-context
+    extraction can be exercised end to end without a production layout; on
+    real data only the layer numbers change.
+    """
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    n = int(die_um // block_um)
+    dens = _smooth_field(rng, n, blob=4, lo=0.30, hi=0.70)
+    pitch = _smooth_field(np.random.default_rng(seed + 7), n, blob=4,
+                          lo=2.0, hi=20.0)
+
+    sl = SynthLayout()
+    for j in range(n):
+        for i in range(n):
+            x0, y0 = i * block_um, j * block_um
+            lines(sl, 8, x0, y0, x0 + block_um, y0 + block_um,
+                  pitch=float(pitch[j, i]), density=float(dens[j, i]))
+            lines(sl, 7, x0, y0, x0 + block_um, y0 + block_um,
+                  pitch=float(pitch[j, i]) * 1.5, density=0.4, vertical=True)
+            via_array(sl, 17, x0 + 5, y0 + 5, x0 + block_um - 5,
+                      y0 + block_um - 5, pitch=float(pitch[j, i]) * 2.0,
+                      size=min(float(pitch[j, i]) * 0.4, 2.0))
+    bumps = bump_array(sl, 60, die_um, pitch=bump_pitch, size=bump_size,
+                       pi_layer=61)
+    crackstop_ring(sl, 62, die_um)
+    sl.write(path)
+    return path, bumps

@@ -25,7 +25,8 @@ from .features import crosslayer
 from .features.geometry import GeometryExtractor
 from .features.grid import build_multiscale
 from .features.orientation import OrientationExtractor
-from .labels import position
+from .features.vias import ViaExtractor
+from .labels import package_context, position
 from .labels.failure import FailureSet, map_to_grid
 from .layout.reader import LayerSpec, LayoutReader
 from .stats import fdr, permutation, univariate
@@ -37,6 +38,12 @@ TIER_PREFIXES = (
     ("metal_density", "tier1"),
     ("perimeter_density", "tier1"),
     ("line_end_density", "tier1"),
+    ("via_density", "tier1"),
+    ("via_count_density", "tier1"),
+    ("mean_via_area", "exploratory"),
+    ("corner_density", "tier1"),
+    ("convex_corner_density", "tier1"),
+    ("concave_corner_density", "tier1"),
     ("horizontal_fraction", "tier1"),
     ("vertical_fraction", "tier1"),
     ("orientation_anisotropy", "tier1"),
@@ -55,6 +62,9 @@ TIER_PREFIXES = (
     ("density_variance_across_layers", "exploratory"),
     ("distance_to_", "tier1_confounder"),
     ("normalized_distance_", "tier1_confounder"),
+    ("bump_", "tier1_confounder"),
+    ("under_bump_indicator", "tier1_confounder"),
+    ("local_bump_pitch", "tier1_confounder"),
 )
 
 POSITION_FEATURES = set(position.POSITION_FEATURES)
@@ -77,24 +87,34 @@ class RunResult:
     metadata: dict = field(default_factory=dict)
 
 
-def _extract_layer(reader, geo_ex, ori_ex, layer, grid, *, with_gradients=True):
+#: Scalars whose spatial gradient is itself a tier-1 feature (spec section 5).
+#: Gradients are not taken of every scalar: each one triples the hypothesis
+#: count, and the literature motivates transitions in density, perimeter and
+#: architecture rather than in every derived descriptor.
+GRADIENT_OF = ("metal_density", "perimeter_density", "line_end_density",
+               "corner_density", "orientation_anisotropy", "via_density")
+
+
+def _extract_layer(reader, geo_ex, ori_ex, via_ex, layer, via_layer, grid, *,
+                   with_gradients=True):
     vals = dict(geo_ex.extract(layer, grid))
     vals.update(ori_ex.extract(layer, grid))
+    if via_layer is not None:
+        vals.update(via_ex.extract(via_layer, grid))
     base = dict(vals)
     if with_gradients:
-        vals.update(grad_mod.gradient_set(
-            base, grid,
-            only=("metal_density", "perimeter_density", "line_end_density",
-                  "orientation_anisotropy")))
+        vals.update(grad_mod.gradient_set(base, grid, only=GRADIENT_OF))
     return vals, base
 
 
 def run(gds_path: str, failures: FailureSet, *,
         layer: LayerSpec | None = None,
         layers: list[LayerSpec] | None = None,
+        via_layers: dict[str, LayerSpec] | None = None,
         scales_um=(25, 50, 100, 250, 500), n_permutations: int = 499,
         include_position: bool = True, with_gradients: bool = True,
         pair_selection: str = "adjacent_and_top",
+        package_layers: "package_context.PackageLayers | None" = None,
         line_end_w_max_um: float | None = None, seed: int = 0) -> RunResult:
     t0 = time.time()
     specs = layers if layers is not None else [layer]
@@ -104,10 +124,17 @@ def run(gds_path: str, failures: FailureSet, *,
     reader = LayoutReader(gds_path)
     geo_ex = GeometryExtractor(reader, line_end_w_max_um=line_end_w_max_um)
     ori_ex = OrientationExtractor(reader)
+    via_ex = ViaExtractor(reader)
+    # Vias are keyed by the metal layer they sit under, so via features carry
+    # that metal layer's identity into the association table rather than
+    # appearing as an unattached layer of their own.
+    via_layers = via_layers or {}
     bbox = reader.bbox()
     grids = build_multiscale(bbox, scales_um)
     stack = LayerStack(tuple(s.name for s in specs))
     scale_floor = failures.min_trustworthy_scale_um()
+    package_layers = package_layers or package_context.PackageLayers()
+    context_notes = package_context.absent_context_note(package_layers)
 
     assoc_rows, perm_rows, feat_frames = [], [], []
 
@@ -123,7 +150,8 @@ def run(gds_path: str, failures: FailureSet, *,
         per_layer_base = {}
 
         for spec in specs:
-            vals, base = _extract_layer(reader, geo_ex, ori_ex, spec, grid,
+            vals, base = _extract_layer(reader, geo_ex, ori_ex, via_ex, spec,
+                                        via_layers.get(spec.name), grid,
                                         with_gradients=with_gradients)
             per_layer_base[spec.name] = base
             for name, v in vals.items():
@@ -137,6 +165,10 @@ def run(gds_path: str, failures: FailureSet, *,
         if include_position:
             for name, v in position.extract(grid, bbox).items():
                 columns.append((name, "-", v, EvidenceClass.PACKAGE_POSITION))
+            if package_layers.any_present:
+                ctx = package_context.extract(grid, bbox, reader, package_layers)
+                for name, v in ctx.items():
+                    columns.append((name, "-", v, EvidenceClass.PACKAGE_POSITION))
 
         for name, layer_name, vals, ecls in columns:
             frame[f"{name}|{layer_name}"] = vals
@@ -187,6 +219,10 @@ def run(gds_path: str, failures: FailureSet, *,
     meta = {
         "gds_path": str(gds_path),
         "layers": [str(s) for s in specs],
+        "via_layers": {k: str(v) for k, v in via_layers.items()},
+        "package_layers": {k: (str(v) if v else None) for k, v in
+                           vars(package_layers).items()},
+        "uncontrolled_confounding": context_notes,
         "pair_selection": pair_selection if len(specs) > 1 else None,
         "with_gradients": with_gradients,
         "die_bbox_um": [bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax],
