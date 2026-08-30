@@ -21,7 +21,15 @@ from ..evidence import EvidenceClass
 #: required at import rather than optional.
 REQUIRED_COLUMNS = ("sample_id", "x_um", "y_um", "failure_type")
 GROUPING_COLUMNS = ("lot_id", "wafer_id", "die_x", "die_y")
-OPTIONAL_COLUMNS = ("confidence", "position_sigma_um", "extent_um", "coord_frame")
+OPTIONAL_COLUMNS = ("confidence", "position_sigma_um", "extent_um", "coord_frame",
+                    "failed_layer", "failed_interface")
+
+#: Columns whose distinct values define separate failure populations. Li et al.
+#: (2023) found the largest energy release rate at one particular upper BEOL
+#: interface, with bottom interconnect interfaces more critical than sidewalls,
+#: so two failures at the same (x, y) on different interfaces are not two
+#: observations of the same thing.
+MODE_COLUMNS = ("failure_type", "failed_layer", "failed_interface")
 
 
 @dataclass
@@ -47,6 +55,49 @@ class FailureSet:
                 f"position_sigma_um is negative ({sigma}); a negative "
                 "uncertainty would certify every analysis scale")
         return sigma
+
+    def die_keys(self) -> "pd.Series":
+        """One identifier per physical die, from lot/wafer/die coordinates."""
+        cols = [c for c in GROUPING_COLUMNS if c in self.table]
+        if not cols:
+            return pd.Series(["<unknown>"] * len(self.table),
+                             index=self.table.index)
+        return (self.table[cols].astype(str)
+                .agg("|".join, axis=1).rename("die_key"))
+
+    def n_dies(self) -> int:
+        return int(self.die_keys().nunique())
+
+    def modes(self) -> dict[str, list]:
+        """Distinct values of every column that defines a failure population."""
+        out = {}
+        for col in MODE_COLUMNS:
+            if col in self.table:
+                vals = sorted(self.table[col].dropna().astype(str).unique())
+                if vals:
+                    out[col] = vals
+        return out
+
+    def assert_single_mode(self, *, allow_pooling: bool = False) -> list[str]:
+        """Refuse to pool failure modes that were not declared poolable.
+
+        A mode column with more than one value means the file mixes
+        populations. They may share a mechanism, but that is an engineering
+        judgement about the physics, not something the counts can settle, so
+        it has to be asserted rather than assumed.
+        """
+        mixed = {k: v for k, v in self.modes().items() if len(v) > 1}
+        if not mixed:
+            return []
+        summary = "; ".join(f"{k}: {v}" for k, v in mixed.items())
+        if not allow_pooling:
+            raise ValueError(
+                f"the failure set mixes populations ({summary}). Analyse them "
+                "separately, or pass allow_pooling=True to assert that these "
+                "modes share a defensible mechanism -- the assertion is "
+                "recorded in the run metadata.")
+        return [f"pooling failure modes across {summary}, asserted by the "
+                "operator rather than established by the data"]
 
     def min_trustworthy_scale_um(self, factor: float = 3.0) -> float:
         """Smallest analysis scale the registration accuracy can support.
@@ -132,6 +183,12 @@ def load_failures(path: str | Path, *, require_grouping: bool = True) -> Failure
             "position_sigma_um absent: registration accuracy unknown, so no "
             "analysis scale can be certified trustworthy"
         )
+    for col in ("failed_layer", "failed_interface"):
+        if col not in df:
+            notes.append(
+                f"{col} absent: the failed layer/interface is not recorded, so "
+                "failures on mechanically different interfaces cannot be "
+                "separated and are being analysed as one population")
 
     _validate_values(df, path)
     return FailureSet(table=df, source=str(path), notes=notes)
@@ -202,3 +259,31 @@ def map_to_grid(failures: FailureSet, grid, *, radius_um: float | None = None
     return {"failure_present": (count > 0).astype(np.int8),
             "failure_count": count,
             "distance_to_nearest_failure": nearest}
+
+
+def map_to_grid_per_die(failures: FailureSet, grid, *,
+                        radius_um: float | None = None
+                        ) -> dict[str, dict[str, np.ndarray]]:
+    """Labels for each die separately, keyed by die identity.
+
+    Pooling several dies of the same design onto one grid and asking "did
+    anything ever fail here" is not a rescaling of the single-die case, it is
+    a different and wrong question: prevalence grows with the number of dies
+    (0.24 for one die becomes 0.98 for ten in a uniform simulation), a cell
+    that failed on one die of ten becomes indistinguishable from one that
+    failed on all ten, and die identity -- the thing spec section 17 wants to
+    hold out -- is gone before any fold can be built from it.
+
+    The observation unit is therefore (cell, die), which is also what spec
+    section 11 means by a case: a location on a piece of silicon.
+    """
+    from dataclasses import replace
+
+    keys = failures.die_keys()
+    out = {}
+    for key in keys.unique():
+        subset = replace(failures,
+                         table=failures.table[keys == key].reset_index(drop=True))
+        out[str(key)] = map_to_grid(subset, grid, radius_um=radius_um)
+    return out
+

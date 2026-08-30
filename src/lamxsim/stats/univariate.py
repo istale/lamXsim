@@ -175,7 +175,8 @@ def analyse(values: np.ndarray, labels: np.ndarray, *, feature: str, layer: str,
 def block_bootstrap_auc_ci(values: np.ndarray, labels: np.ndarray, grid, *,
                            n_boot: int = 999, block_cells: int | None = None,
                            alpha: float = 0.05, seed: int = 0,
-                           mask: np.ndarray | None = None
+                           mask: np.ndarray | None = None,
+                           groups: np.ndarray | None = None
                            ) -> tuple[float, float]:
     """Percentile CI for an AUC, resampling contiguous blocks of cells.
 
@@ -186,12 +187,18 @@ def block_bootstrap_auc_ci(values: np.ndarray, labels: np.ndarray, grid, *,
     from .permutation import autocorrelation_range_cells
 
     labels = labels.astype(int)
-    if block_cells is None:
+    if block_cells is None and groups is None:
         block_cells = max(autocorrelation_range_cells(values, grid), 1)
+    elif block_cells is None:
+        block_cells = 1
 
-    rows = np.array([c.row for c in grid.cells])
-    cols = np.array([c.col for c in grid.cells])
-    bid = (rows // block_cells) * (grid.n_cols // block_cells + 1) + (cols // block_cells)
+    if groups is None:
+        rows = np.array([c.row for c in grid.cells])
+        cols = np.array([c.col for c in grid.cells])
+        bid = ((rows // block_cells) * (grid.n_cols // block_cells + 1)
+               + (cols // block_cells))
+    else:
+        bid = np.asarray(groups)
     keep = np.ones(len(values), bool) if mask is None else np.asarray(mask, bool)
     groups = [g[keep[g]] for g in
               (np.where(bid == b)[0] for b in np.unique(bid))]

@@ -79,7 +79,8 @@ def block_permutation_test(values: np.ndarray, labels: np.ndarray, grid, *,
                            statistic=None, n_permutations: int = 999,
                            block_cells: int | None = None,
                            seed: int = 0,
-                           mask: np.ndarray | None = None) -> PermutationResult:
+                           mask: np.ndarray | None = None,
+                           groups: np.ndarray | None = None) -> PermutationResult:
     """Permute labels in contiguous square blocks and compare the statistic."""
     from .univariate import roc_auc
 
@@ -88,16 +89,26 @@ def block_permutation_test(values: np.ndarray, labels: np.ndarray, grid, *,
             return roc_auc(v[l == 1], v[l == 0])
 
     labels = labels.astype(int)
-    if block_cells is None:
+    if block_cells is None and groups is None:
         block_cells = max(autocorrelation_range_cells(values, grid), 1)
+    elif block_cells is None:
+        block_cells = 1
 
-    rows = np.array([c.row for c in grid.cells])
-    cols = np.array([c.col for c in grid.cells])
-    block_id = (rows // block_cells) * (grid.n_cols // block_cells + 1) + (cols // block_cells)
+    if groups is None:
+        rows = np.array([c.row for c in grid.cells])
+        cols = np.array([c.col for c in grid.cells])
+        block_id = ((rows // block_cells) * (grid.n_cols // block_cells + 1)
+                    + (cols // block_cells))
+    else:
+        block_id = np.asarray(groups)
 
     keep = np.ones(len(values), bool) if mask is None else np.asarray(mask, bool)
+    # An explicit grouping lets a multi-die run permute within (die, block)
+    # rather than across dies, which would destroy the die structure the
+    # held-out-die validation depends on.
+    ids = block_id if groups is None else np.asarray(groups)
     groups = [g[keep[g]] for g in
-              (np.where(block_id == b)[0] for b in np.unique(block_id))]
+              (np.where(ids == b)[0] for b in np.unique(ids))]
     groups = [g for g in groups if len(g)]
 
     observed = statistic(values[keep], labels[keep])
@@ -129,3 +140,12 @@ def block_permutation_test(values: np.ndarray, labels: np.ndarray, grid, *,
         p_value=float(p), n_permutations=len(finite),
         block_cells=int(block_cells), block_um=float(block_cells * grid.scale_um),
     )
+
+
+def spatial_block_ids(grid, block_cells: int = 1) -> np.ndarray:
+    """Contiguous square block index per grid cell."""
+    rows = np.array([c.row for c in grid.cells])
+    cols = np.array([c.col for c in grid.cells])
+    return ((rows // block_cells) * (grid.n_cols // block_cells + 1)
+            + (cols // block_cells))
+

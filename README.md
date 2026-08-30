@@ -122,6 +122,45 @@ pair separates properly:
 | segmented, same density | 0.4000 | 0.4200 | 0.0400 |
 | ratio | 1.00x | 1.03x | **20x** |
 
+## The observation unit is (cell, die)
+
+The failure schema has always required `lot_id`, `wafer_id`, `die_x`, `die_y`,
+for the held-out-die validation of spec section 17. The analysis then pooled
+every die onto one grid and asked "did anything ever fail here", which is not
+a rescaled version of the single-die question but a different and wrong one:
+
+| dies | failures | pooled prevalence |
+|---|---|---|
+| 1 | 30 | 0.24 |
+| 3 | 90 | 0.57 |
+| 10 | 300 | **0.98** |
+
+Prevalence climbs towards 1 with the number of dies, a cell that failed on one
+die of ten becomes indistinguishable from one that failed on all ten, and die
+identity — the thing section 17 wants to hold out — is gone before any fold can
+be built from it. Requiring those columns and then discarding them is worse
+than not requiring them, because a reader reasonably assumes they were used.
+
+Each die now contributes its own labels over the same layout, features repeat
+rather than labels being collapsed, and `run` uses **leave-one-die-out** folds
+whenever more than one die is present. With a single die the run says plainly
+that nothing here can be shown to generalise. Permutation blocks combine the
+spatial block with the die, so a permutation never moves a label between dies —
+and the block size still comes from the feature's own autocorrelation, because
+fixing it at one cell turns the block permutation back into the naive shuffle
+it exists to replace.
+
+## Failure modes are not pooled by assumption
+
+`failure_type` was required at import and never consulted. Li et al. (2023)
+found the largest energy release rate at one particular upper BEOL interface,
+with bottom interconnect interfaces more critical than sidewalls, so two
+failures at the same coordinates on different interfaces are not two
+observations of the same thing. `failed_layer` and `failed_interface` are now
+part of the schema, a file mixing modes is refused, and pooling can be asserted
+— `--allow-pooling-modes` — with the assertion recorded in the run metadata as
+the operator's judgement rather than a property of the data.
+
 ## Registration: what the measurement accuracy allows
 
 Spec section 10 assumes failures have already been brought into layout
@@ -408,7 +447,11 @@ src/lamxsim/
   features/lineends.py   candidate line-end definitions and the scored choice
   calibre/svrf.py        SVRF deck generation for the marker -> DENSITY route
   calibre/ingest.py      Calibre RDB/CSV back onto the analysis grid
-  labels/failure.py      failure import, schema validation, scale gating
+  labels/failure.py      failure import, value validation, die and mode identity
+  labels/inspection.py   inspection footprint and control opportunity
+  labels/package_context.py bump, pad, PI-opening and crackstop context
+  study.py               study manifest: the semantics GDS does not contain
+  report.py              results partitioned by what each row may claim
   labels/position.py     PACKAGE_POSITION features (section 9)
   labels/simulate.py     simulated labels, for validation only
   stats/univariate.py    effect size, AUC, PR-AUC, enrichment, effective N, CI

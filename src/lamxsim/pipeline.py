@@ -27,7 +27,7 @@ from .features.grid import build_multiscale
 from .features.orientation import OrientationExtractor
 from .features.vias import ViaExtractor
 from .labels import inspection, package_context, position
-from .labels.failure import FailureSet, map_to_grid
+from .labels.failure import FailureSet, map_to_grid, map_to_grid_per_die
 from .layout.reader import LayerSpec, LayoutReader
 from . import report as report_mod
 from .stats import fdr, permutation, univariate
@@ -118,6 +118,7 @@ def run(gds_path: str, failures: FailureSet, *,
         package_layers: "package_context.PackageLayers | None" = None,
         footprint: "inspection.InspectionFootprint | None" = None,
         min_coverage: float = 0.5,
+        allow_pooling_modes: bool = False,
         line_end_w_max_um: float | None = None, seed: int = 0) -> RunResult:
     t0 = time.time()
     specs = layers if layers is not None else [layer]
@@ -152,6 +153,15 @@ def run(gds_path: str, failures: FailureSet, *,
             "a control. If inspection was partial or targeted, features "
             "correlated with where it was targeted will show spurious "
             "association.")
+    context_notes.extend(failures.assert_single_mode(
+        allow_pooling=allow_pooling_modes))
+    n_dies = failures.n_dies()
+    if n_dies == 1:
+        context_notes.append(
+            "a single die: spec section 17 asks for held-out dies, so nothing "
+            "here can be shown to generalise. Treat the result as a local "
+            "diagnostic of this piece of silicon.")
+
     audit = inspection.audit_failures(footprint, failures, dbu=reader.units.dbu)
     if not audit["consistent"]:
         context_notes.append(
@@ -164,23 +174,39 @@ def run(gds_path: str, failures: FailureSet, *,
 
     coverage_summary = {}
     for scale, grid in sorted(grids.items()):
-        labels = map_to_grid(failures, grid)
-        y = labels["failure_present"].astype(int)
+        # The observation unit is (cell, die). With one die this is the cell
+        # itself; with several, each die contributes its own labels over the
+        # same layout, and features repeat rather than labels being collapsed.
+        per_die = map_to_grid_per_die(failures, grid)
+        die_names = sorted(per_die)
+        n_cells = len(grid)
+        cell_index = np.tile(np.arange(n_cells), len(die_names))
+        die_index = np.repeat(np.arange(len(die_names)), n_cells)
+        y = np.concatenate([per_die[d]["failure_present"].astype(int)
+                            for d in die_names])
+        nearest = np.concatenate([per_die[d]["distance_to_nearest_failure"]
+                                  for d in die_names])
 
-        eligible, cover = inspection.eligibility(
+        eligible_cell, cover = inspection.eligibility(
             footprint, grid, min_coverage=min_coverage, dbu=reader.units.dbu)
+        eligible = eligible_cell[cell_index]
         coverage_summary[scale] = {
-            "n_cells": len(grid), "n_eligible": int(eligible.sum()),
+            "n_cells": len(grid), "n_dies": len(die_names),
+            "n_observations": int(len(y)),
+            "n_eligible": int(eligible.sum()),
             "n_cases_eligible": int(y[eligible].sum()),
             "n_cases_excluded": int(y[~eligible].sum()),
+            "prevalence": float(y[eligible].mean()) if eligible.any() else float("nan"),
             "mean_coverage": float(cover.mean()),
         }
 
-        frame = pd.DataFrame(grid.to_arrays())
-        frame["inspected_fraction"] = cover
+        cell_arrays = grid.to_arrays()
+        frame = pd.DataFrame({k: v[cell_index] for k, v in cell_arrays.items()})
+        frame["die_key"] = np.array(die_names)[die_index]
+        frame["inspected_fraction"] = cover[cell_index]
         frame["eligible"] = eligible
         frame["failure_present"] = y
-        frame["distance_to_nearest_failure"] = labels["distance_to_nearest_failure"]
+        frame["distance_to_nearest_failure"] = nearest
 
         columns: list[tuple[str, str, np.ndarray, EvidenceClass]] = []
         per_layer_base = {}
@@ -206,7 +232,22 @@ def run(gds_path: str, failures: FailureSet, *,
                 for name, v in ctx.items():
                     columns.append((name, "-", v, EvidenceClass.PACKAGE_POSITION))
 
-        for name, layer_name, vals, ecls in columns:
+        def observation_groups(cell_values):
+            """Permutation groups combining the spatial block with the die.
+
+            The block size still comes from the feature's own spatial
+            autocorrelation -- fixing it at one cell would turn the block
+            permutation back into the naive per-cell shuffle it exists to
+            replace. The die index is then folded in so a permutation never
+            moves a label between dies.
+            """
+            size = max(permutation.autocorrelation_range_cells(cell_values, grid), 1)
+            block_of_cell = permutation.spatial_block_ids(grid, size)
+            span = int(block_of_cell.max()) + 1
+            return die_index * span + block_of_cell[cell_index], size
+
+        for name, layer_name, cell_vals, ecls in columns:
+            vals = cell_vals[cell_index]
             frame[f"{name}|{layer_name}"] = vals
             finite = np.isfinite(vals) & eligible
             if finite.sum() < 8 or y[finite].sum() == 0:
@@ -217,23 +258,41 @@ def run(gds_path: str, failures: FailureSet, *,
             # effective_n and the CI need the grid, so only compute them on the
             # complete field; a gradient with its boundary ring dropped is
             # scored without them rather than with a wrong neighbour graph.
-            if np.isfinite(vals).all():
-                a.effective_n = univariate.effective_n(vals, grid, mask=eligible)
+            # Computed on whatever is finite rather than skipped when
+            # anything is not. A gradient drops its die-edge ring by design,
+            # and skipping its interval would leave it ranked by effect size
+            # alone -- which lets a feature that could not be given an
+            # interval outrank one that could.
+            finite_cell = np.isfinite(cell_vals) & eligible_cell
+            if finite_cell.sum() >= 8:
+                # Spatial dependence is a property of one die's lattice;
+                # separate dies contribute independently, so the effective
+                # count scales with the number of them.
+                per_die_eff = univariate.effective_n(cell_vals, grid,
+                                                     mask=finite_cell)
+                a.effective_n = per_die_eff * len(die_names)
+                ci_groups, _ = observation_groups(
+                    np.where(finite_cell, cell_vals, np.nanmean(cell_vals[finite_cell])))
                 a.auc_ci_low, a.auc_ci_high = univariate.block_bootstrap_auc_ci(
-                    vals, y, grid, n_boot=299, seed=seed, mask=eligible)
+                    vals, y, grid, n_boot=299, seed=seed, mask=finite,
+                    groups=ci_groups)
             row = a.as_row()
             row["evidence_class"] = ecls.value
             row["n_cells"] = len(grid)
+            row["n_dies"] = len(die_names)
             row["n_eligible"] = int(eligible.sum())
             row["n_finite"] = int(finite.sum())
             row["scale_trustworthy"] = (
                 bool(scale >= scale_floor) if np.isfinite(scale_floor) else None)
             assoc_rows.append((a, row))
 
-            if n_permutations and np.isfinite(vals).all():
+            if n_permutations and finite.sum() >= 8:
+                filled = np.where(finite_cell, cell_vals,
+                                  np.nanmean(cell_vals[finite_cell]))
+                obs_groups, block_size = observation_groups(filled)
                 pr = permutation.block_permutation_test(
                     vals, y, grid, n_permutations=n_permutations, seed=seed,
-                    mask=eligible)
+                    mask=finite, groups=obs_groups, block_cells=block_size)
                 p = pr.as_row()
                 p.update(feature=name, layer=layer_name, scale_um=scale)
                 perm_rows.append(p)
@@ -270,6 +329,8 @@ def run(gds_path: str, failures: FailureSet, *,
         "die_bbox_um": [bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax],
         "scales_um": sorted(grids),
         "n_failures": len(failures),
+        "n_dies": n_dies,
+        "failure_modes": failures.modes(),
         "failures_simulated": failures.simulated,
         "failure_source": failures.source,
         "failure_notes": failures.notes,

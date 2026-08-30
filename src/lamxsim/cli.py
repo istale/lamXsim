@@ -134,7 +134,7 @@ def cmd_run(args) -> int:
     is computed rather than being reported with a caveat.
     """
     from .registration.apply import register, scale_gate
-    from .stats.cv import buffered_block_folds, leakage_report
+    from .stats.cv import buffered_block_folds, grouped_folds, leakage_report
     from .stats import ablation
 
     manifest = StudyManifest.load(args.manifest)
@@ -155,6 +155,8 @@ def cmd_run(args) -> int:
     failures = load_failures(args.failures)
     for n in failures.notes:
         print(f"  failure import: {n}")
+    print(f"  {len(failures)} failures across {failures.n_dies()} die(s); "
+          f"modes {failures.modes()}")
 
     # -- registration ------------------------------------------------
     scales = list(manifest.scales_um)
@@ -197,7 +199,8 @@ def cmd_run(args) -> int:
         scales_um=tuple(scales), n_permutations=manifest.n_permutations,
         with_gradients=manifest.with_gradients,
         pair_selection=manifest.pair_selection,
-        line_end_w_max_um=manifest.line_end_w_max_um(), seed=args.seed)
+        line_end_w_max_um=manifest.line_end_w_max_um(), seed=args.seed,
+        allow_pooling_modes=args.allow_pooling_modes)
     res.metadata["manifest"] = manifest.report()
     if registration_report is not None:
         res.metadata["registration"] = registration_report
@@ -219,12 +222,27 @@ def cmd_run(args) -> int:
                   f"analysed scales {scales}")
             args.ablation = False
         grid = build_grid(bbox, scale)
-        frame = res.features[res.features.scale_um == scale]
+        frame = res.features[res.features.scale_um == scale].reset_index(drop=True)
         y = frame["failure_present"].to_numpy(int)
-        folds = buffered_block_folds(grid, block_um=args.block_um,
-                                     n_folds=args.n_folds,
-                                     buffer_um=args.block_um)
-        leak = leakage_report(folds, grid, min_separation_um=args.block_um)
+
+        # Spec section 17 prefers held-out dies over any within-die split, and
+        # the failure file is required to carry lot/wafer/die identity for
+        # exactly this. Within-die blocking is the fallback when there is only
+        # one die, and then the result cannot speak to generalisation.
+        n_dies = frame["die_key"].nunique()
+        if n_dies > 1:
+            folds = grouped_folds(frame["die_key"].to_numpy())
+            leak = {"scheme": "held-out die", "n_folds": len(folds),
+                    "held_out": [f.label for f in folds]}
+            print(f"\nspatial CV: leave-one-die-out over {n_dies} dies")
+        else:
+            folds = buffered_block_folds(grid, block_um=args.block_um,
+                                         n_folds=args.n_folds,
+                                         buffer_um=args.block_um)
+            leak = leakage_report(folds, grid, min_separation_um=args.block_um)
+            print(f"\nspatial CV: buffered blocks within a single die "
+                  f"({args.block_um:g}um). This cannot show generalisation; "
+                  "held-out dies would.")
         try:
             result = ablation.run(frame, y, folds, seed=args.seed)
         except ValueError as exc:
@@ -235,8 +253,10 @@ def cmd_run(args) -> int:
         else:
             deltas = pd.DataFrame(result.deltas)
             core = deltas[~deltas.model.str.contains(r"\+position")]
+            scheme = ("held-out die" if n_dies > 1
+                      else f"buffered blocks, {args.block_um:g}um")
             print(f"\n=== does geometry add anything beyond position? "
-                  f"({scale:g}um, {len(folds)} buffered folds) ===")
+                  f"({scale:g}um, {len(folds)} folds, {scheme}) ===")
             print(core[["model", "model_auc", "baseline_auc", "delta_auc",
                         "ci_low", "ci_high", "adds_information"]]
                   .to_string(index=False, float_format=lambda v: f"{v:+.4f}"))
@@ -422,6 +442,9 @@ def main(argv=None) -> int:
     rn.add_argument("--block-um", type=float, default=300.0,
                     help="spatial CV block and buffer size")
     rn.add_argument("--n-folds", type=int, default=5)
+    rn.add_argument("--allow-pooling-modes", action="store_true",
+                    help="assert that the mixed failure types/layers in the "
+                         "file share a defensible mechanism")
     rn.add_argument("--ablation-scale-um", type=float, default=None,
                     help="scale for the multivariate model; defaults to the "
                          "finest scale that survived the registration gate")
