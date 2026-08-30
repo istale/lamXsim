@@ -1,0 +1,30 @@
+# delamXim thin-slice configuration.
+
+layer:
+  name: M8
+  layer: 8
+  datatype: 0
+
+# Physical analysis scales (spec section 6). Scales below ~3x the failure-location
+# positional uncertainty are flagged untrustworthy at runtime rather than
+# silently analysed.
+scales_um: [25, 50, 100, 250, 500, 1000]
+
+n_permutations: 999
+
+phase0:
+  # Size of the hypothesis space the full spec would test (spec sections 12-14).
+  n_features: 25
+  n_layers: 12
+  n_scales: 6
+  # Literature-backed primary hypotheses, from references/feature_evidence_map.csv.
+  tier1_hypotheses: 20
+  # Spatial autocorrelation penalty. Measure these from a real layout before
+  # trusting the numbers; the defaults are deliberately middle-of-the-road.
+  expected_moran_i: 0.6
+  cells_per_patch: 9
+  control_ratio: 4.0
+  target_power: 0.80
+  # Positional uncertainty of the failure measurement (C-SAM/SAT resolution
+  # plus die-placement registration error).
+  position_sigma_um: 50.0

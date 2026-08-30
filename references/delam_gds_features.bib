@@ -1,0 +1,132 @@
+% =====================================================================
+%  delamXim — GDS Spatial Delamination Correlation Engine
+%  Literature foundation for deterministic GDS layout features
+%  Generated 2026-08-29. Verified via OpenAlex / Unpaywall / Semantic Scholar.
+% =====================================================================
+
+% ---- CORE #1 : BEOL architecture -> actual fracture -----------------
+@article{vanstreels2020beol,
+  author  = {Vanstreels, Kris and Zahedmanesh, Houman and Gonzalez, Mario},
+  title   = {Impact of back-end-of-line architecture on chip-package-interaction
+             in advanced interconnects},
+  journal = {Microelectronics Reliability},
+  year    = {2020},
+  doi     = {10.1016/j.microrel.2020.113825},
+  url     = {https://doi.org/10.1016/j.microrel.2020.113825},
+  note    = {CLOSED ACCESS. Correct DOI is .113825 (NOT .113767 -- that PII
+             maps to an unrelated TRIAC ageing paper). Evidence: shear
+             microprobing + FIB post-mortem + local bump pull + in-situ SEM
+             bending + FEM. Supports: metal_density, via_density,
+             top_metal_distribution, cross_layer_architecture.}
+}
+
+% ---- CORE #2 : metal/via density -> effective properties -> ERR -----
+@article{zahedmanesh2019metallization,
+  author  = {Zahedmanesh, Houman and Vanstreels, Kris},
+  title   = {Mechanical integrity of nano-interconnects; the impact of
+             metallization density},
+  journal = {Micro and Nano Engineering},
+  volume  = {2},
+  pages   = {83--88},
+  year    = {2019},
+  doi     = {10.1016/j.mne.2018.12.001},
+  url     = {https://doi.org/10.1016/j.mne.2018.12.001},
+  note    = {GOLD OPEN ACCESS, CC-BY-NC-ND. Publisher landing page blocks
+             scripted download; open in a browser to save the PDF.
+             Key result: relationship is NON-MONOTONIC -- higher metal
+             density does not simply mean worse delamination; a stiff top
+             Z-group can SHIELD the ULK layer and lower pre-crack ERR.
+             Supports: metal_density, via_density, cross_layer_architecture.}
+}
+
+% ---- CORE #3 : perimeter beats density ------------------------------
+@inproceedings{yoo2004perimeter,
+  author    = {Yoo, B. U. and others},
+  title     = {Characterization of patterned low-k film delamination during CMP
+               for the 32nm node Cu/ultra low-k (k=1.6--1.8) integration},
+  booktitle = {Proc. IEEE International Interconnect Technology Conference (IITC)},
+  year      = {2004},
+  doi       = {10.1109/IITC.2004.1345761},
+  url       = {https://ieeexplore.ieee.org/document/1345761},
+  note      = {CLOSED ACCESS (IEEE Xplore). THE most important paper for this
+               project's feature design: pattern PERIMETER (Cu/low-k boundary
+               length) was more decisive than pattern DENSITY.
+               Supports: perimeter_density as a first-class, co-equal feature.}
+}
+
+% ---- CORE #4 : line ends, corners, orientation -----------------------
+@article{tan2008delamination,
+  author  = {Tan, T. L. and Gan, C. L. and Du, A. Y. and others},
+  title   = {Delamination-induced dielectric breakdown in Cu/low-k interconnects},
+  journal = {Journal of Materials Research},
+  volume  = {23},
+  number  = {6},
+  pages   = {1802--1808},
+  year    = {2008},
+  doi     = {10.1557/JMR.2008.0222},
+  url     = {https://doi.org/10.1557/JMR.2008.0222},
+  note    = {CLOSED ACCESS (Cambridge Core / Springer). Observed delamination
+             preferentially at TERMINATED TIPS and CORNERS rather than along
+             parallel comb lines, with dependence on Cu-line orientation.
+             Supports: line_end_density, corner_density, orientation.}
+}
+
+% ---- CORE #5 : layout design levers for CPI --------------------------
+@inproceedings{rabie2018cpi,
+  author    = {Rabie, Mohamed A. and Raman, Thiagarajan and Mirza, Fahad and
+               Polomoff, Nicholas A. and Faruqui, Danish and Pozder, Scott and
+               Hassan, Md Khaled},
+  title     = {{BEoL} Layout Design Considerations to Mitigate {CPI} Risk},
+  booktitle = {Proc. IEEE International Interconnect Technology Conference (IITC)},
+  year      = {2018},
+  doi       = {10.1109/IITC.2018.8430440},
+  url       = {https://ieeexplore.ieee.org/document/8430440},
+  note      = {CLOSED ACCESS (IEEE Xplore). Layout levers studied: die-corner
+             metal tiles, final Al cap metal orientation (diagonal under corner
+             bumps), octagonal pad geometry, 80 deg PSPI opening, wide double-rail
+             crackstop, wide-metal slotting.
+             Supports: top_metal_distribution, orientation, corner_region,
+             layout_transition. Also motivates a bump/C4 map input.}
+}
+
+% =====================================================================
+%  OPEN-ACCESS SUPPORTING LITERATURE (PDFs downloaded to ./pdf/)
+% =====================================================================
+
+@article{oa_beol_failure_locations_20nm,
+  title   = {An Investigation on the Most Likely Failure Locations in the BEoL
+             Stack of a 20 nm Chip Due to Chip Package Interaction with the Use
+             of Novel Semi-Elliptical Cracks},
+  year    = {2023},
+  note    = {OPEN ACCESS. Local file:
+             pdf/OA_BEoL-failure-locations-20nm-CPI-semielliptical-cracks.pdf
+             Relevance: gives the spatial prior for WHERE in the BEoL stack and
+             where on the die CPI cracks initiate -- i.e. exactly the
+             PACKAGE_POSITION confounder the engine must control for.}
+}
+
+@article{oa_beol_design_factors_fccsp,
+  title   = {The Effect of BEOL Design Factors on the Thermal Reliability of
+             Flip-Chip Chip-Scale Packaging},
+  journal = {Micromachines},
+  volume  = {16},
+  number  = {2},
+  pages   = {121},
+  year    = {2025},
+  doi     = {10.3390/mi16020121},
+  note    = {OPEN ACCESS. Local file:
+             pdf/OA_Micromachines2025_BEOL-design-factors-thermal-reliability-FCCSP.pdf
+             Relevance: modern, freely readable stand-in for Vanstreels 2020 on
+             how BEOL design factors drive thermo-mechanical reliability.}
+}
+
+@article{oa_gambino_cu32nm,
+  author  = {Gambino, Jeffrey P.},
+  title   = {Copper Interconnect Technology for the 32 nm Node and Beyond},
+  year    = {2009},
+  note    = {OPEN ACCESS. Local file:
+             pdf/OA_Gambino_Cu-interconnect-32nm-node-and-beyond.pdf
+             Relevance: background on ULK integration, CMP delamination and
+             CPI at the node Yoo 2004 targets. Useful context, not a
+             delamination-vs-layout measurement.}
+}
