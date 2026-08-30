@@ -4,6 +4,8 @@ Everything here runs on a layout and a layer map, with no failure data of any
 kind. The tests that matter are the ones that stop it becoming a risk score,
 because that is what an exposure atlas turns into if nobody is watching.
 """
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -196,3 +198,91 @@ def test_unsupported_physics_is_listed_per_channel(study, built, tmp_path):
     assert set(gaps.channel) == {c.channel_id for c in exposure.CHANNELS}
     assert (~gaps.recoverable_from_gds).all()
     assert "EMC thickness" in set(gaps.quantity)
+
+
+def test_every_conditioned_candidate_lies_inside_its_own_condition(tmp_path):
+    """The condition was written into the report and not into the computation.
+
+    ``routing_in_bump_frame`` shipped 28 candidates on the regression die, all
+    of them carrying ``conditioned_on=distance_to_nearest_corner`` in the CSV
+    and every single one of them *outside* the corner region that condition
+    names -- the ranking ran die-wide and the gate was never applied. Ranking
+    inside the region gives 8, in different places.
+
+    Feature-level unit tests could not see this: ``condition_mask`` and
+    ``evaluate`` were both correct, and the caller simply did not put them
+    together.
+    """
+    from lamxsim import atlas as atlas_mod
+    from lamxsim.features.grid import build_multiscale
+    from lamxsim.layout.reader import LayoutReader
+    from lamxsim.study import StudyManifest
+
+    golden = Path(__file__).parent / "golden"
+    manifest = StudyManifest.load(golden / "golden_manifest.yaml")
+    gds = str(golden / "golden_die.gds")
+    result = atlas_mod.build(gds, manifest)
+
+    reader = LayoutReader(gds, top_cell=manifest.top_cell)
+    die_bbox = manifest.die_bbox(reader)
+    conditioned = [c for c in exposure.CHANNELS if c.conditional_on]
+    assert conditioned, "nothing to check; the test has lost its subject"
+
+    checked = 0
+    for scale, grid in sorted(build_multiscale(reader.bbox(),
+                                               manifest.scales_um).items()):
+        flat, _ = atlas_mod._extract_scale(reader, manifest, grid, die_bbox)
+        index = {(round(c.x_center, 6), round(c.y_center, 6)): i
+                 for i, c in enumerate(grid.cells)}
+        for channel in conditioned:
+            owners = (["-"] if channel.scope == "die"
+                      else [s.name for s in manifest.metal_layers])
+            for owner in owners:
+                mask, _ = exposure.condition_mask(
+                    channel, atlas_mod._channel_inputs(flat, owner), len(grid))
+                rows = result.candidates[
+                    (result.candidates.channel == channel.channel_id)
+                    & (result.candidates.layer == owner)
+                    & (result.candidates.scale_um == scale)]
+                for _, row in rows.iterrows():
+                    i = index[(round(row.x_um, 6), round(row.y_um, 6))]
+                    assert mask[i], (
+                        f"{channel.channel_id} candidate at "
+                        f"({row.x_um}, {row.y_um}) is outside "
+                        f"{channel.conditional_on}, which the same row "
+                        "declares it was conditioned on")
+                    assert row.condition_cells == int(mask.sum())
+                    checked += 1
+    assert checked, "no conditioned candidate was produced, so nothing was checked"
+
+
+def test_die_relative_channels_need_a_declared_die_outline(tmp_path):
+    """Whether this GDS is a whole die or a piece of one is not in the layout.
+
+    With no outline the die bbox is the geometry bbox either way, so the test
+    that used to guard this -- comparing the two -- could only ever be false,
+    and the flag it set disabled nothing. Corner distance, offset from the die
+    centre and bump radial direction are all measured from that frame.
+    """
+    import yaml
+
+    from lamxsim import atlas as atlas_mod
+    from lamxsim.study import StudyManifest
+
+    golden = Path(__file__).parent / "golden"
+    raw = yaml.safe_load((golden / "golden_manifest.yaml").read_text())
+    assert raw["layout"].pop("die_outline_um", None) is not None
+    path = tmp_path / "no_outline.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    result = atlas_mod.build(str(golden / "golden_die.gds"),
+                             StudyManifest.load(path))
+    assert result.metadata["die_frame_declared"] is False
+    assert result.metadata["die_relative_channels_disabled"] is True
+
+    needs_frame = {c.channel_id for c in exposure.CHANNELS if c.needs_die_frame}
+    assert needs_frame
+    assert not set(result.candidates.channel) & needs_frame
+    reasons = {r.reason for cs in result.channels.values() for _, r in cs
+               if r.channel.channel_id in needs_frame}
+    assert any("no die_outline_um" in r for r in reasons)

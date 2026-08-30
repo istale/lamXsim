@@ -270,5 +270,77 @@ def test_a_deck_missing_a_manifest_scale_is_refused(tmp_path):
     out = tmp_path / "one_scale"
     emulate.run(gds, _layers(manifest), scales_um=(float(manifest.scales_um[0]),),
                 step_ratio=1.0, outdir=out)
-    with pytest.raises(ValueError, match="would silently"):
+    with pytest.raises(ValueError, match="incomplete") as excinfo:
         atlas_mod.build(gds, manifest, calibre_dir=str(out))
+    assert "250um" in str(excinfo.value)
+
+
+def test_a_partial_deck_directory_is_refused(tmp_path):
+    """It used to succeed and report itself as a Calibre extraction.
+
+    A directory holding one corner file produced a run whose header said
+    ``extraction: calibre`` and whose density, perimeter and via maps had all
+    come from KLayout, with nothing in the output saying so.
+    """
+    from lamxsim import atlas as atlas_mod
+
+    manifest = StudyManifest.load(str(GOLDEN / "golden_manifest.yaml"))
+    gds = str(GOLDEN / "golden_die.gds")
+    full = tmp_path / "full"
+    emulate.run(gds, _layers(manifest), scales_um=tuple(manifest.scales_um),
+                step_ratio=1.0, outdir=full)
+
+    partial = tmp_path / "partial"
+    partial.mkdir()
+    for name in ("extraction_manifest.json", "convex_corner_M8.rdb"):
+        (partial / name).write_bytes((full / name).read_bytes())
+    with pytest.raises(ValueError, match="incomplete"):
+        atlas_mod.build(gds, manifest, calibre_dir=str(partial))
+
+
+def test_the_eps_guard_is_a_gate_and_not_a_note(tmp_path):
+    """It was generated into every deck and consumed by nobody.
+
+    The CLI told a human the checks must come back empty. A precondition
+    checked by a human is not part of an evidence chain: the result is now a
+    required file, and a non-empty one stops the run.
+    """
+    from lamxsim import atlas as atlas_mod
+
+    manifest = StudyManifest.load(str(GOLDEN / "golden_manifest.yaml"))
+    gds = str(GOLDEN / "golden_die.gds")
+    out = tmp_path / "deck"
+    emulate.run(gds, _layers(manifest), scales_um=tuple(manifest.scales_um),
+                step_ratio=1.0, outdir=out)
+
+    guard = out / "eps_violation_M8.rdb"
+    assert guard.exists() and not len(ingest.read_marker_rdb(guard))
+    atlas_mod.build(gds, manifest, calibre_dir=str(out))       # passes clean
+
+    guard.write_text("// EPS_VIOLATION_M8\n10.0 10.0 10.02 10.02\n")
+    with pytest.raises(ValueError, match="narrower than the declared"):
+        atlas_mod.build(gds, manifest, calibre_dir=str(out))
+
+    guard.unlink()
+    with pytest.raises(FileNotFoundError, match="eps_violation_M8"):
+        atlas_mod.build(gds, manifest, calibre_dir=str(out))
+
+
+def test_the_guard_uses_the_projected_metric(tmp_path):
+    """A guard that fires on every layout is a guard that gets switched off.
+
+    Measured corner to corner, every re-entrant corner is a pair of edges a
+    vanishing distance apart: 177 violations on this die, where an opening
+    confirms nothing is actually narrow.
+    """
+    import klayout.db as db
+
+    from lamxsim.layout.reader import LayerSpec, LayoutReader
+
+    reader = LayoutReader(str(GOLDEN / "golden_die.gds"))
+    region = reader.region(LayerSpec("M8", 8, 0))
+    w = reader.units.um_to_dbu(0.2)
+    assert region.width_check(w, False, db.Region.Euclidian).count() == 177
+    assert region.width_check(w, False, db.Region.Projection).count() == 0
+    half = reader.units.um_to_dbu(0.1)
+    assert (region - region.sized(-half).sized(half)).count() == 0

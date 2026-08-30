@@ -135,6 +135,35 @@ def _channel_inputs(flat: dict, layer: str) -> dict[str, np.ndarray]:
     return out
 
 
+def _score(channel, inputs, n_cells, die_frame_declared, no_frame_reason):
+    """One channel, with its literature conditioning actually applied.
+
+    The conditioning used to be attached to the record and not to the
+    computation: the candidate rows carried ``conditioned_on`` while the
+    ranking ran die-wide. On the regression die that meant all 28
+    ``routing_in_bump_frame`` candidates sat *outside* the corner region the
+    citation is about -- the condition named in the report excluded every row
+    the report contained. Ranking inside the region gives 8, in different
+    places.
+
+    A channel measured from the die frame is refused outright when no die
+    outline was declared, rather than scored against a frame that may not be
+    the die.
+    """
+    if channel.needs_die_frame and not die_frame_declared:
+        return exposure.ChannelResult(
+            channel=channel, percentile=np.full(n_cells, np.nan),
+            inputs_used=(), available=False, reason=no_frame_reason)
+
+    mask, note = exposure.condition_mask(channel, inputs, n_cells)
+    result = exposure.evaluate(channel, inputs, n_cells,
+                               mask=None if not channel.conditional_on else mask)
+    if note:
+        result.reason = ((result.reason + "; ") if result.reason else "") + note
+    result.excluded_by_condition = ~mask
+    return result
+
+
 def build(gds_path: str, manifest, *, candidate_percentile: float =
           CANDIDATE_PERCENTILE, calibre_dir: str | None = None) -> Atlas:
     reader = LayoutReader(gds_path, top_cell=manifest.top_cell)
@@ -152,23 +181,38 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
             f"the declared die outline {_fmt(die_bbox)} does not contain the "
             f"loaded geometry {_fmt(geometry_bbox)}. One of them is wrong, and "
             "every die-relative channel depends on which.")
-    roi_without_outline = (not manifest.die_outline_um
-                           and _is_roi(die_bbox, geometry_bbox))
+    # Whether the loaded geometry is a whole die or a region cut out of one is
+    # not decidable from the layout: with no declared outline the die bbox is
+    # the geometry bbox either way, so a test comparing the two can only ever
+    # be false. An earlier version had exactly that test and a flag that was
+    # therefore always false, disabling nothing. The frame has to be declared,
+    # and the channels that need one are refused when it is not.
+    die_frame_declared = bool(manifest.die_outline_um)
+    no_die_frame_reason = (
+        "" if die_frame_declared else
+        "no die_outline_um in the manifest, so the die frame is the bounding "
+        "box of whatever geometry this file holds. Corner distance, offset "
+        "from the die centre and bump radial direction are measured from that "
+        "frame, and if this GDS is a region cut out of a larger die they are "
+        "all measured from a frame that does not exist. Nothing in a layout "
+        "distinguishes the two cases, so this channel is not scored")
 
-    calibre, calibre_provenance = None, {}
+    calibre, calibre_provenance, eps_guard = None, {}, {}
     if calibre_dir:
         from .calibre import ingest as calibre_ingest
 
         calibre = calibre_ingest.discover(calibre_dir)
-        missing = sorted(set(manifest.scales_um) - set(calibre.scales_um()))
-        if missing:
+        wanted = [s.name for s in manifest.metal_layers]
+        wanted += [v.name for v in manifest.via_layers.values()]
+        absent = [l for l in wanted if l not in calibre.layers()]
+        if absent:
             raise ValueError(
-                f"the deck output in {calibre_dir} covers scales "
-                f"{calibre.scales_um()}um, and the manifest asks for "
-                f"{sorted(manifest.scales_um)}um; {missing}um would silently "
-                "fall back to the KLayout extractor, so half the atlas would "
-                "come from each path with nothing saying which. Regenerate "
-                "the deck for the manifest's scales, or narrow the manifest.")
+                f"the deck output in {calibre_dir} has no layer {absent}; the "
+                "manifest analyses them, so they would fall back to the "
+                "KLayout extractor while the run reported itself as a deck "
+                "extraction.")
+        calibre.check_complete(wanted, manifest.scales_um)
+        eps_guard = calibre.check_eps_guard(wanted)
 
     grids = build_multiscale(geometry_bbox, manifest.scales_um)
     frames, channels, candidate_rows = [], {}, []
@@ -191,10 +235,11 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
                    for c in exposure.CHANNELS if c.scope == "layer"]
 
         for owner, channel, inputs in scored:
-            for result in [exposure.evaluate(channel, inputs, len(grid))]:
-                spec = type("S", (), {"name": owner})
+            for result in [_score(channel, inputs, len(grid),
+                                  die_frame_declared, no_die_frame_reason)]:
                 scale_channels.append((owner, result))
                 if not result.available:
+                    result.reason = f"{result.reason} [{owner} @ {scale:g}um]"
                     continue
                 note = exposure.tie_compression_note(result, candidate_percentile)
                 if note:
@@ -216,6 +261,11 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
                                          if result.triggering_input is not None
                                          else ""),
                         "conditioned_on": result.channel.conditional_on,
+                        "condition_cells": (
+                            int((~result.excluded_by_condition).sum())
+                            if result.channel.conditional_on
+                            and result.excluded_by_condition is not None
+                            else ""),
                         "references": ";".join(result.channel.references),
                         "mechanism": result.channel.mechanism,
                         "two_sided": result.channel.two_sided,
@@ -238,7 +288,8 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
         "die_bbox_um": [die_bbox.xmin, die_bbox.ymin,
                         die_bbox.xmax, die_bbox.ymax],
         "die_outline_declared": bool(manifest.die_outline_um),
-        "die_relative_channels_disabled": bool(roi_without_outline),
+        "die_frame_declared": die_frame_declared,
+        "die_relative_channels_disabled": not die_frame_declared,
         "scales_um": sorted(grids),
         "candidate_percentile": candidate_percentile,
         "feature_source": ("calibre" if calibre else "klayout"),
@@ -247,6 +298,7 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
             "emulated": calibre.emulated,
             "generator": calibre.manifest.get("generator", ""),
             "eps_um": {l: calibre.eps_um(l) for l in calibre.layers()},
+            "eps_guard_violations": eps_guard,
             "features_taken": {l: v for l, v in calibre_provenance.items()},
             "note": ("features not listed here were computed in Python from "
                      "the GDS: orientation, gradients, cross-layer terms, "
@@ -437,6 +489,43 @@ def _limits_document(atlas: Atlas, manifest, overlay: dict) -> str:
         lines.append("There is deliberately no combined hotspot layer.")
         lines.append("")
 
+    lines += ["## The die frame", ""]
+    if atlas.metadata.get("die_frame_declared"):
+        lines += [
+            "A die outline is declared in the manifest, so distance to a "
+            "corner, offset from the die centre and bump radial direction are "
+            "measured from a frame the manifest vouches for.",
+            "",
+        ]
+    else:
+        lines += [
+            "**No die outline is declared.** The die frame is therefore the "
+            "bounding box of whatever geometry this file holds. If this GDS is "
+            "a region cut out of a larger die, every die-relative quantity is "
+            "measured from a frame that does not exist -- and nothing in a "
+            "layout distinguishes the two cases, so the channels that depend "
+            "on that frame were not scored at all rather than scored against "
+            "a guess. Declare `die_outline_um` to enable them.",
+            "",
+            "This also means the candidates here must not be read as \"the "
+            "regions of the die most worth inspecting\": they are the extremes "
+            "of the geometry supplied.",
+            "",
+        ]
+
+    conditioned = [c for c in exposure.CHANNELS if c.conditional_on]
+    if conditioned:
+        lines += ["## Literature conditioning", ""]
+        for channel in conditioned:
+            lines.append(
+                f"- `{channel.channel_id}` is ranked **inside** the top "
+                f"{100 - channel.conditional_percentile:g}% of "
+                f"`{channel.conditional_on}`"
+                + (" (low end)" if channel.conditional_invert else "")
+                + ", because that is the region its citation is about. Cells "
+                  "outside it are not ranked and cannot be candidates.")
+        lines.append("")
+
     cal = atlas.metadata.get("calibre")
     lines += ["## Where the feature maps came from", ""]
     if cal:
@@ -454,6 +543,14 @@ def _limits_document(atlas: Atlas, manifest, overlay: dict) -> str:
             "Per-layer eps used for the perimeter band: "
             + ", ".join(f"{k} {v:g}um" for k, v in sorted(cal["eps_um"].items())
                         if v) + ".",
+            "",
+            "The deck's minimum-width guard ran and was empty on every metal "
+            "layer ("
+            + ", ".join(f"{k}: {v}" for k, v in
+                        sorted(cal["eps_guard_violations"].items()))
+            + "). A non-empty one would have stopped this run: eps is a "
+              "quarter of the declared minimum width, and the inside band "
+              "collapses silently once eps passes half the real one.",
             "",
         ]
         if cal["emulated"]:

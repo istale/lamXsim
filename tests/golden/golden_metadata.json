@@ -7,6 +7,7 @@
     1500.0,
     1500.0
   ],
+  "die_frame_declared": true,
   "die_outline_declared": true,
   "die_relative_channels_disabled": false,
   "evidence_level": "1 for the feature maps (deterministic geometry, checkable against KLayout or Calibre); 3 for the candidates (a mechanistic engineering hypothesis with a citation). Not level 2: no measured failure was involved, so nothing here is a statistical association, a probability, or a design rule.",

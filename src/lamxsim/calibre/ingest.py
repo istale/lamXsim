@@ -233,6 +233,11 @@ def load_scale(bbox: BBox, scale_um: float, layer: str, files: dict[str, str],
         "perimeter_band": perimeter_conversion(eps_um),
         "narrow_structure": area_conversion("narrow_structure_density"),
     }
+    # A gate is not a feature. check_eps_guard reads this one and refuses a
+    # non-empty result; turning it into a map here would produce a "places the
+    # guard fired" density, which is not what it means and would be all zeros
+    # on every run that is allowed to proceed.
+    gates = ("eps_violation",)
     count_features = {
         "convex_corner": "convex_corner_density",
         "concave_corner": "concave_corner_density",
@@ -249,6 +254,8 @@ def load_scale(bbox: BBox, scale_um: float, layer: str, files: dict[str, str],
         used[c.feature] = c
 
     for kind, path in (marker_files or {}).items():
+        if kind in gates:
+            continue
         if kind not in count_features:
             raise ValueError(f"unknown marker kind {kind!r}; "
                              f"known: {sorted(count_features)}")
@@ -355,6 +362,15 @@ def to_count_grid(markers: pd.DataFrame, grid: Grid) -> np.ndarray:
     return out
 
 
+#: What a complete deck run holds for one layer. A partial directory used to
+#: be accepted: whatever RDBs happened to be there were used and every other
+#: map fell back to KLayout without a word, so a run with one corner file
+#: reported "extraction: calibre" while almost every number came from Python.
+REQUIRED_DENSITY = {"metal": ("metal_density", "perimeter_band"),
+                    "via": ("via_density",)}
+REQUIRED_MARKERS = {"metal": ("convex_corner", "concave_corner"),
+                    "via": ("via_marker",)}
+
 #: Features the deck can supply. Everything else in the atlas -- orientation,
 #: gradients, cross-layer terms, position, package context -- is computed in
 #: Python either way, so a Calibre run replaces part of the extraction, never
@@ -409,6 +425,75 @@ class CalibreSource:
                           eps_um=self.eps_um(layer) or 1.0,
                           step_ratio=float(self.manifest["step_ratio"]),
                           marker_files=marker_files, grid=grid).values
+
+
+    def is_via(self, layer: str) -> bool:
+        for entry in self.manifest["layers"]:
+            if entry["name"] == layer:
+                return bool(entry["is_via"])
+        raise KeyError(layer)
+
+    def check_complete(self, layers, scales_um) -> None:
+        """Refuse a run that would mix the two extractors without saying so.
+
+        Every layer and scale the atlas will ask for must be present in full.
+        A missing map is not a smaller Calibre run: it is a Python map wearing
+        a Calibre label, and the label is the whole reason to prefer one.
+        """
+        gaps = []
+        for layer in layers:
+            kind = "via" if self.is_via(layer) else "metal"
+            for marker in REQUIRED_MARKERS[kind]:
+                if (layer, marker) not in self.markers:
+                    gaps.append(f"{layer}: {marker} marker file")
+            for scale in scales_um:
+                for kd in REQUIRED_DENSITY[kind]:
+                    if (layer, float(scale), kd) not in self.density:
+                        gaps.append(f"{layer} @ {float(scale):g}um: {kd}")
+        if gaps:
+            raise ValueError(
+                f"the deck output in {self.directory} is incomplete; "
+                f"{len(gaps)} required output(s) are missing:\n  "
+                + "\n  ".join(gaps[:12])
+                + (f"\n  ... and {len(gaps) - 12} more" if len(gaps) > 12 else "")
+                + "\nEach missing map would fall back to the KLayout "
+                  "extractor while the run still reported itself as a deck "
+                  "extraction. Re-run the deck, or drop --features-from and "
+                  "extract everything in Python.")
+
+    def check_eps_guard(self, layers) -> dict[str, int]:
+        """Require the deck's own minimum-width guard to have been run and passed.
+
+        The guard exists because eps is a quarter of the declared minimum
+        width and the band collapses once eps passes half the real one -- a
+        cliff, silent, and worth -38 % to -87 %. It was generated into every
+        deck and consumed by nobody: the CLI told a human to check it. A
+        human-checked precondition is not part of the evidence chain, so the
+        result is now a required file and a non-empty one is an error.
+        """
+        out = {}
+        for layer in layers:
+            if self.is_via(layer):
+                continue
+            path = self.directory / f"eps_violation_{layer}.rdb"
+            if not path.exists():
+                raise FileNotFoundError(
+                    f"{path} is missing. The deck's EPS_VIOLATION_{layer} check "
+                    "must be run and its result written out; without it nothing "
+                    "establishes that the layout is as wide as the manifest "
+                    "says, and every perimeter number here would be understated "
+                    "by an unknown amount if it is not.")
+            n = len(read_marker_rdb(path))
+            if n:
+                raise ValueError(
+                    f"EPS_VIOLATION_{layer} reported {n} location(s) narrower "
+                    f"than the declared minimum width, so eps="
+                    f"{self.eps_um(layer):g}um is past the point where the "
+                    "inside band collapses and the perimeter density for this "
+                    "layer is understated. Correct min_width for this layer in "
+                    "the manifest and re-run the deck.")
+            out[layer] = n
+        return out
 
 
 def discover(directory: str | Path) -> CalibreSource:

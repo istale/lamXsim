@@ -4,7 +4,7 @@
 
 Every feature map is a **deterministic geometry fact** -- checkable against KLayout or Calibre, independent of any failure data.
 
-Every one of the 137 candidate records is a **mechanistic engineering hypothesis**: a location where this layout departs from a lever the literature documents, with the citation attached. It is a reason to look there first.
+Every one of the 117 candidate records is a **mechanistic engineering hypothesis**: a location where this layout departs from a lever the literature documents, with the citation attached. It is a reason to look there first.
 
 ## What it is not
 
@@ -42,7 +42,7 @@ Every one of the 137 candidate records is a **mechanistic engineering hypothesis
   - references: vanstreels2020beol, zahedmanesh2019metallization
   - observable: top-to-underlying density and orientation mismatch
 
-**routing_in_bump_frame** -- 28 candidate(s), one-sided
+**routing_in_bump_frame** -- 8 candidate(s), one-sided
   - mechanism: the package loads the layout through the bumps, and diagonal final metal under the corner bumps is one of the documented levers, so routing that is radial or tangential there is the departure
   - references: rabie2018cpi
   - observable: routing direction resolved against the bump radial direction
@@ -56,7 +56,8 @@ Every one of the 137 candidate records is a **mechanistic engineering hypothesis
 
 ## Channels that could not be scored
 
-- `via_architecture` on M7: none of ['via_density', 'via_count_density'] is available
+- `via_architecture` on M7: none of ['via_density', 'via_count_density'] is available [M7 @ 100um]
+- `via_architecture` on M7: none of ['via_density', 'via_count_density'] is available [M7 @ 250um]
 
 ## Declared gaps in the manifest
 
@@ -76,6 +77,15 @@ Every one of the 137 candidate records is a **mechanistic engineering hypothesis
 - layer 206: `via_architecture`
 
 There is deliberately no combined hotspot layer.
+
+## The die frame
+
+A die outline is declared in the manifest, so distance to a corner, offset from the die centre and bump radial direction are measured from a frame the manifest vouches for.
+
+## Literature conditioning
+
+- `routing_in_bump_frame` is ranked **inside** the top 25% of `distance_to_nearest_corner` (low end), because that is the region its citation is about. Cells outside it are not ranked and cannot be candidates.
+- `pi_opening_proximity` is ranked **inside** the top 25% of `nearest_bump_distance_from_die_center`, because that is the region its citation is about. Cells outside it are not ranked and cannot be candidates.
 
 ## Where the feature maps came from
 

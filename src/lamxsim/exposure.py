@@ -61,6 +61,14 @@ class Channel:
     #: evaluated per layer reports the same candidate once per layer, which
     #: reads as corroboration and is duplication.
     scope: str = "layer"
+
+    #: True when the channel is measured from the die frame -- distance to a
+    #: corner, offset from the die centre, the radial direction of a bump.
+    #: None of those means anything unless the die outline is known, and the
+    #: geometry bounding box is the die outline only when the GDS happens to
+    #: be a whole die. Nothing in a layout says which it is, so the manifest
+    #: has to, and a channel marked here is refused when it does not.
+    needs_die_frame: bool = False
     requires: tuple[str, ...] = ()
     note: str = ""
 
@@ -142,7 +150,7 @@ CHANNELS: tuple[Channel, ...] = (
         observable="routing direction resolved against the bump radial "
                    "direction",
         inputs=("routing_diagonality",),
-        two_sided=False, invert=True, scope="layer",
+        two_sided=False, invert=True, scope="layer", needs_die_frame=True,
         conditional_on="distance_to_nearest_corner", conditional_invert=True,
         unsupported_physics=("EMC thickness", "underfill CTE and modulus",
                              "bump stiffness", "package warpage",
@@ -164,7 +172,7 @@ CHANNELS: tuple[Channel, ...] = (
                    "within the outermost-bump region",
         inputs=("distance_to_nearest_pi_opening",
                 "distance_to_pi_opening_corner"),
-        two_sided=False, invert=True, scope="die",
+        two_sided=False, invert=True, scope="die", needs_die_frame=True,
         conditional_on="nearest_bump_distance_from_die_center",
         unsupported_physics=("EMC thickness", "underfill CTE and modulus",
                              "bump stiffness", "package warpage",

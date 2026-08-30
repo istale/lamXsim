@@ -147,6 +147,26 @@ def run(gds_path: str, layers: list[CalibreLayer], *,
         else:
             eps = layer.eps_um
             result.eps_um[layer.name] = eps
+
+            # The deck's EPS_VIOLATION check, run rather than assumed. Empty
+            # is the passing result and the ingest side requires the file.
+            #
+            # Projection metric, not the default Euclidian one. Measured
+            # corner-to-corner, every re-entrant corner is a pair of edges a
+            # vanishing distance apart, so the Euclidian check reports 177
+            # violations on the golden die where the Projection check reports
+            # none and a morphological opening confirms nothing is narrow. A
+            # guard that fires on every layout is a guard that gets switched
+            # off.
+            narrower = region.width_check(u.um_to_dbu(layer.min_width_um),
+                                          False, db.Region.Projection)
+            pts = [[u.dbu_to_um((e.first.x1 + e.second.x2) / 2),
+                    u.dbu_to_um((e.first.y1 + e.second.y2) / 2)]
+                   for e in narrower.each()]
+            guard = out / f"eps_violation_{layer.name}.rdb"
+            _write_marker_rdb(guard, np.array(pts, float).reshape(-1, 2),
+                              f"EPS_VIOLATION_{layer.name}")
+            result.markers[(layer.name, "eps_violation")] = guard
             band = region - region.sized(-u.um_to_dbu(eps))
             convex, concave = corners_mod.classify(region)
             for kind, pts in (("convex_corner", convex),

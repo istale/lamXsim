@@ -111,21 +111,40 @@ def _layer_defs(layers) -> str:
     return "\n".join(out) + "\n"
 
 
-def _eps_guard(layers) -> str:
-    """A deck that fails loudly if eps was set too large for the real layout."""
+def _eps_guard(layers, outdir) -> str:
+    """A deck that fails loudly if eps was set too large for the real layout.
+
+    The result is written out, not just computed. Telling a human to check a
+    check is not part of an evidence chain: the ingest side requires this file
+    and refuses a non-empty one, so a layout narrower than the manifest claims
+    stops the run instead of quietly understating every perimeter.
+    """
     out = ["""// ---- eps validity guard ----
 // The inside-band approximation is exact only while eps < min_width/2.
 // These checks flag any geometry narrower than the assumed minimum width;
 // a non-empty result means the eps below is wrong for this layout and every
-// perimeter number derived from it is understated.
+// perimeter number derived from it is understated. Each writes an RDB that
+// the ingest side requires to exist and to be empty -- it is a gate, not a
+// note for the operator.
 """]
     for l in layers:
         if l.is_via:
             continue
         out.append(f"EPS_VIOLATION_{l.name} {{ @ {l.name} narrower than assumed "
                    f"min width {l.min_width_um:g}um -- eps={l.eps_um:g}um is unsafe")
-        out.append(f"  INTERNAL {l.name} < {l.min_width_um:g}")
-        out.append("}\n")
+        out.append(f"  INTERNAL {l.name} < {l.min_width_um:g} PROJECTING")
+        out.append("  // PROJECTING, i.e. facing edges only. Measured corner "
+                   "to corner instead, every")
+        out.append("  // re-entrant corner is two edges a vanishing distance "
+                   "apart: on the regression")
+        out.append("  // die that is 177 violations where the projected check "
+                   "finds none and an")
+        out.append("  // opening confirms nothing is narrow. Confirm the "
+                   "option spelling against the")
+        out.append("  // tool -- this deck has not been run on Calibre.")
+        out.append("}")
+        out.append(f'DFM RDB EPS_VIOLATION_{l.name} '
+                   f'"{{outdir}}/eps_violation_{l.name}.rdb" ALL CELLS\n')
     return "\n".join(out)
 
 
@@ -256,7 +275,7 @@ def generate(layers: list[CalibreLayer], scales_um=(25, 50, 100, 250, 500, 1000)
     return "".join([
         _header(layers, scales_um, step_ratio),
         _layer_defs(layers), "\n",
-        _eps_guard(layers), "\n",
+        _eps_guard(layers, outdir), "\n",
         _via_guard(layers), "\n",
         _markers(layers), "\n",
         _density_checks(layers, scales_um, step_ratio, outdir),

@@ -175,8 +175,11 @@ def cmd_characterize(args) -> int:
         print(f"  extraction: {cal['generator']}"
               f"{'  (EMULATED, not run through Calibre)' if cal['emulated'] else ''}")
         print(f"    from deck  : {', '.join(taken) if taken else 'nothing matched'}")
-        print(f"    from Python: orientation, gradients, cross-layer, position, "
-              f"package context -- the deck does not produce these")
+        print(f"    eps guard  : {', '.join(f'{k} {v} violation(s)' for k, v in sorted(cal['eps_guard_violations'].items())) or 'no metal layer'}")
+        print("    from Python: everything else -- orientation, gradients, "
+              "cross-layer terms, position and package context. The deck is "
+              "required to be complete for the layers and scales the manifest "
+              "asks for, so nothing else fell back silently.")
 
     if manifest.gaps:
         print("\ndeclared gaps in the manifest:")
