@@ -75,15 +75,20 @@ def partition(associations: pd.DataFrame) -> dict[str, pd.DataFrame]:
     underpowered = df[is_geometry & is_primary_tier & ok_scale & ~powered]
     exploratory = df[is_geometry & ~is_primary_tier & ok_scale & powered]
 
-    # Ranked by the conservative end of the interval, not the point estimate,
-    # so a wide interval cannot outrank a tight one at equal effect.
+    # Ranked by the effect the interval actually guarantees, so a wide
+    # interval cannot outrank a tight one. An interval that straddles 0.5
+    # guarantees nothing -- the data does not exclude "no effect" -- and
+    # scores zero. Taking the nearer endpoint unconditionally would instead
+    # reward an interval that is wide on both sides: on a real three-die run
+    # that put a feature at AUC 0.512 with q = 0.94 above the driver at
+    # AUC 0.698 with q = 0.0008.
     if "auc_ci_low" in df.columns and "auc_ci_high" in df.columns:
         for t in (primary, confounders, exploratory, unsupported, underpowered):
-            lo = (t["auc_ci_low"] - 0.5).abs()
-            hi = (t["auc_ci_high"] - 0.5).abs()
+            lo, hi = t["auc_ci_low"], t["auc_ci_high"]
+            guaranteed = np.where(lo > 0.5, lo - 0.5,
+                                  np.where(hi < 0.5, 0.5 - hi, 0.0))
             t["conservative_effect"] = np.where(
-                np.isfinite(lo) & np.isfinite(hi), np.minimum(lo, hi),
-                t["abs_effect"] / 2)
+                np.isfinite(lo) & np.isfinite(hi), guaranteed, 0.0)
         order = ["conservative_effect", "abs_effect"]
     else:
         order = ["abs_effect"]

@@ -121,6 +121,42 @@ def test_a_wide_interval_does_not_outrank_a_tight_one():
     assert list(report.partition(df)["primary"].feature) == ["tight", "wide"]
 
 
+def test_an_interval_straddling_chance_guarantees_nothing():
+    """It must not outrank a result whose interval excludes 0.5.
+
+    Ranking on the nearer endpoint alone rewards an interval that is wide on
+    both sides. On a three-die run that put a feature at AUC 0.512 with
+    q = 0.94 above the driver at AUC 0.698 with q = 0.0008, because 0.512's
+    lower end sat marginally further from 0.5 than the driver's did.
+    """
+    df = pd.DataFrame([
+        _row(feature="straddles_chance", roc_auc=0.512, effect_size=0.024,
+             auc_ci_low=0.3625, auc_ci_high=0.6522, fdr_q_value=0.94),
+        _row(feature="driver", roc_auc=0.698, effect_size=0.396,
+             auc_ci_low=0.6306, auc_ci_high=0.7774, fdr_q_value=0.0008),
+    ])
+    primary = report.partition(df)["primary"]
+    assert list(primary.feature) == ["driver", "straddles_chance"]
+    assert primary.set_index("feature").loc[
+        "straddles_chance", "conservative_effect"] == 0.0
+
+
+def test_a_protective_association_is_ranked_on_its_own_merits():
+    """An interval entirely below chance excludes no-effect just as firmly.
+
+    Zahedmanesh and Vanstreels (2019) show a stiff top group lowering the
+    crack driving force beneath it, so a feature associating with fewer
+    failures is a result, not a non-result.
+    """
+    df = pd.DataFrame([
+        _row(feature="protective", roc_auc=0.28, effect_size=-0.44,
+             auc_ci_low=0.20, auc_ci_high=0.38),
+        _row(feature="weak", roc_auc=0.55, effect_size=0.10,
+             auc_ci_low=0.51, auc_ci_high=0.60),
+    ])
+    assert list(report.partition(df)["primary"].feature) == ["protective", "weak"]
+
+
 def test_summary_states_what_the_result_is_not(tmp_path):
     df = pd.DataFrame([_row()])
     paths = report.write(df, tmp_path, metadata={
