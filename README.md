@@ -1,10 +1,20 @@
 # lamXsim — GDS Spatial Delamination Correlation Engine
 
-**Status: GDS-first research prototype + thin vertical slice.** The real-data
-CLI currently analyzes one layer; the library extracts metal density,
-perimeter, line ends, orientation and gradients, with synthetic validation of
-cross-layer and statistical behavior. It is not a delamination predictor or a
-qualified design-rule generator.
+**Status: a GDS-first, literature-grounded tool for generating and testing
+failure hypotheses.** Not a physics solver, and not a reliability workflow that
+can be signed off unattended.
+
+The real-data path is complete end to end: a study manifest declares the layer
+semantics GDS does not contain, registration is fitted and its error gates
+which analysis scales are admissible, the multi-layer stack is extracted with
+vias and package context, held-out-die validation runs when more than one die
+is present, and results are partitioned by what each row is allowed to claim.
+
+Every feature family with direct delamination evidence in
+`references/feature_evidence_map.csv` is implemented. What remains is not
+missing features -- see [Known gaps](#known-gaps) for what is, and
+[What GDS cannot answer](#what-gds-cannot-answer) for what no amount of work
+here will fix.
 
 ## Engineering interpretation
 
@@ -480,14 +490,54 @@ Correcting 9,576 tests together leaves nothing significant at realistic failure
 counts. Tiers come from `references/feature_evidence_map.csv` and are set by
 literature evidence, not by looking at results.
 
-## Not built (deliberate)
+## Known gaps
 
-Sections 4G–4I (connectivity, largest structures, empty area) remain — all
-three are `exploratory` tier with no direct delamination evidence, so they are
-the lowest-value additions. Section 4B (via density) needs a real via layer. Sections 16–18 (multivariate baseline, spatial CV, ablation)
-are Phase 6 and need real failure data. Sections 19–23 (ConvNeXt, VLM,
-hotspots, back-annotation) stay closed until Phase 6 shows deterministic
-geometry carries signal.
+Accurate as of the current commit. Verified against the code rather than
+recalled.
+
+**Declared semantics not yet fully applied.** The manifest carries a
+`line_max_width_um` and a `min_width_um` per metal layer, but the CLI takes the
+widest value across the stack and applies it to every layer, so an M7 rule of
+1 um is overridden by an M8 rule of 2 um and a wide M7 line can be read as a
+terminated tip. `min_width_um` does not reach extraction at all.
+
+**A failure outside the inspected footprint only warns.** Finding something
+where nothing was looked at disproves the population definition -- the
+coordinate frame, the registration, the footprint or the die frame is wrong --
+and the run continues, quietly dropping those failures.
+
+**Package geometry is partial.** Bump distance and radial/tangential
+decomposition, PI-opening edge and corner distance, crackstop rail distance
+and pad edge distance exist. Not yet expressed: routing orientation relative to
+the bump radial direction (Rabie's diagonal final-metal lever is directional,
+so a scalar distance cannot test it), pad overlap fraction, PI-opening shape
+descriptors, and seal-ring, slotting, dummy-fill and wide-metal-discontinuity
+as feature families of their own.
+
+**One inspection footprint and one layout revision for all dies.** Per-die
+footprints are not expressible, and the run assumes every die shares the GDS
+being analysed. A lot spanning a layout revision has to be split by hand.
+
+**Deliberately not built.** Sections 4G-4I (connectivity, largest structures,
+empty area) are `exploratory` tier with no direct delamination evidence, so
+they are the lowest-value additions. Sections 19-23 (ConvNeXt, VLM, hotspot
+generation, GDS back-annotation) stay closed until a real study shows
+deterministic geometry carries signal. An effective-stiffness proxy was
+evaluated and rejected as provably redundant -- see above.
+
+## What GDS cannot answer
+
+No amount of work in this repository recovers these, and the software records
+them as study strata rather than fabricating proxies: elastic moduli, CTE and
+their temperature dependence; interface adhesion and fracture toughness;
+residual stress, cure and reflow history; package warpage, bump stiffness,
+mould compound and underfill; the initial defect population; fabrication bias
+relative to drawn geometry; and inspection sensitivity and false-negative rate.
+
+If those vary across the samples in a study, an apparent geometry effect may be
+standing in for the variation. The minimum remedy is to hold them fixed or
+record them as strata -- which is a decision about the measurement campaign,
+not something the analysis can settle.
 
 **Still needed for the real-data path:** bump/C4, pad and PI-opening semantics
 when those layers are available, plus a CLI workflow that applies the fitted
