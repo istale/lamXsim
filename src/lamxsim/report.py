@@ -27,6 +27,13 @@ that decide what a row may be used for:
   the row anyway is not enforcement.
 
 Only rows that clear all five appear in the primary table.
+
+`primary` is the **pre-specified hypothesis set**: every combination the study
+committed to testing, whatever it came out at. That is the right object to
+correct over, and a row with q = 1 belongs in it. It is not a list of
+findings, and read as one it is badly misleading, so `supported` is written
+separately -- the subset whose spatially corrected q clears alpha and whose
+interval excludes chance.
 """
 from __future__ import annotations
 
@@ -46,6 +53,9 @@ CONFOUNDER_TIERS = ("tier1_confounder",)
 #: width, and ranking by effect size alone puts that degenerate row above a
 #: real, well-powered one.
 MIN_CLASS_SIZE = 10
+
+#: A supported finding must clear this on the spatially corrected q-value.
+ALPHA = 0.05
 
 
 def _is_traced(feature: str) -> bool:
@@ -72,8 +82,9 @@ def partition(associations: pd.DataFrame) -> dict[str, pd.DataFrame]:
     if associations.empty:
         empty = associations.copy()
         return {k: empty.copy() for k in
-                ("primary", "confounders", "exploratory", "unsupported_scale",
-                 "underpowered", "not_spatially_corrected", "not_traceable")}
+                ("primary", "supported", "confounders", "exploratory",
+                 "unsupported_scale", "underpowered",
+                 "not_spatially_corrected", "not_traceable")}
 
     df = associations.copy()
     df["abs_effect"] = df["effect_size"].abs()
@@ -135,8 +146,19 @@ def partition(associations: pd.DataFrame) -> dict[str, pd.DataFrame]:
     else:
         order = ["abs_effect"]
 
+    # The subset that actually says something. Separating it is not a
+    # statistical nicety: "primary_results.csv" is read as "the findings", and
+    # the hypothesis set contains rows at q = 1 by construction.
+    supported = primary
+    if "spatial_q_value" in primary.columns:
+        clears_alpha = primary["spatial_q_value"] <= ALPHA
+        excludes_chance = primary.get("conservative_effect", 0) > 0 \
+            if "conservative_effect" in primary.columns else True
+        supported = primary[clears_alpha & excludes_chance]
+
     return {
         "primary": primary.sort_values(order, ascending=False),
+        "supported": supported.sort_values(order, ascending=False),
         "confounders": confounders.sort_values(order, ascending=False),
         "exploratory": exploratory.sort_values(order, ascending=False),
         "unsupported_scale": unsupported.sort_values(order, ascending=False),
@@ -174,8 +196,11 @@ def write(associations: pd.DataFrame, outdir: str | Path, *,
     lines = [
         "# Results by what each row may claim",
         "",
-        f"- primary            {counts['primary']:5d}  literature-backed geometry, "
-        "FDR-corrected, at a scale the registration supports",
+        f"- supported          {counts['supported']:5d}  **the findings**: "
+        f"spatially corrected q <= {ALPHA}, with an interval excluding chance",
+        f"- primary            {counts['primary']:5d}  the pre-specified "
+        "hypothesis set that was corrected over -- it contains rows at q = 1 "
+        "by construction and is not a list of findings",
         f"- confounders        {counts['confounders']:5d}  package position; "
         "controlled for, never a finding",
         f"- exploratory        {counts['exploratory']:5d}  no direct delamination "
@@ -214,9 +239,20 @@ def write(associations: pd.DataFrame, outdir: str | Path, *,
 
 
 def format_primary(associations: pd.DataFrame, limit: int = 10) -> str:
+    """The supported findings, not the hypothesis set.
+
+    The console shows what the run actually supports; the full pre-specified
+    set is in primary.csv for anyone checking the correction.
+    """
     parts = partition(associations)
-    p = summary_table(parts["primary"]).head(limit)
-    if p.empty:
-        return ("no primary result: every row was a confounder, an exploratory "
-                "family, or measured at a scale the registration cannot support")
-    return p.to_string(index=False, float_format=lambda v: f"{v:.4f}")
+    table = summary_table(parts["supported"]).head(limit)
+    if table.empty:
+        n_primary = len(parts["primary"])
+        if n_primary:
+            return (f"no supported finding: {n_primary} hypotheses were tested "
+                    f"and corrected, none reached a spatial q of {ALPHA} with "
+                    "an interval excluding chance")
+        return ("no primary hypothesis survived: every row was a confounder, an "
+                "exploratory family, unsupported by the registration accuracy, "
+                "underpowered, or not spatially corrected")
+    return table.to_string(index=False, float_format=lambda v: f"{v:.4f}")

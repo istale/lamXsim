@@ -22,6 +22,10 @@ class PermutationResult:
     n_permutations: int
     block_cells: int
     block_um: float
+    #: Blocks with no same-sized partner to exchange with. They keep their
+    #: labels, so the test is conservative there rather than approximate.
+    n_blocks_not_exchangeable: int = 0
+    n_blocks: int = 0
 
     def as_row(self) -> dict:
         return self.__dict__.copy()
@@ -137,22 +141,34 @@ def block_permutation_test(values: np.ndarray, labels: np.ndarray, grid, *,
             by_stratum.setdefault(strata[g[0]], []).append(i)
         block_strata = list(by_stratum.values())
 
+    # Blocks are exchanged only with blocks of the same size, within a
+    # stratum. Concatenating every block's labels and slicing them out by
+    # target size instead splits one source block across two targets and
+    # merges parts of two into a third, which is no longer a block
+    # permutation: the within-block structure it exists to preserve is broken
+    # exactly at the die edge and the ROI boundary, where blocks are ragged,
+    # and the null comes out narrower than the truth.
+    exchange_sets = []
+    ragged = 0
+    for members in block_strata:
+        by_size: dict[int, list[int]] = {}
+        for i in members:
+            by_size.setdefault(len(groups[i]), []).append(i)
+        for size, same in by_size.items():
+            if len(same) > 1:
+                exchange_sets.append(same)
+            else:
+                ragged += len(same)
+
     observed = statistic(values[keep], labels[keep])
     rng = np.random.default_rng(seed)
     null = np.empty(n_permutations)
     for k in range(n_permutations):
-        shuffled = np.empty_like(labels)
-        for members in block_strata:
+        shuffled = labels.copy()          # blocks with no partner stay put
+        for members in exchange_sets:
             order = rng.permutation(len(members))
-            pool = np.concatenate([labels[groups[members[j]]] for j in order])
-            pos = 0
-            for i in members:
-                g = groups[i]
-                take = pool[pos:pos + len(g)]
-                if len(take) < len(g):
-                    take = np.concatenate([take, pool[:len(g) - len(take)]])
-                shuffled[g] = take
-                pos += len(g)
+            for target, source in zip(members, [members[j] for j in order]):
+                shuffled[groups[target]] = labels[groups[source]]
         null[k] = statistic(values[keep], shuffled[keep])
 
     finite = null[np.isfinite(null)]
@@ -165,6 +181,7 @@ def block_permutation_test(values: np.ndarray, labels: np.ndarray, grid, *,
         null_sd=float(np.std(finite)) if len(finite) else float("nan"),
         p_value=float(p), n_permutations=len(finite),
         block_cells=int(block_cells), block_um=float(block_cells * grid.scale_um),
+        n_blocks_not_exchangeable=int(ragged), n_blocks=len(groups),
     )
 
 

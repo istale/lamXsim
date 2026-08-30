@@ -37,9 +37,33 @@ def _load_config(path: str | None) -> dict:
     return yaml.safe_load(Path(path).read_text()) or {}
 
 
+def _tier1_family_size(manifest_path) -> int:
+    """Tier-1 rows the FDR will actually correct, from the manifest.
+
+    Registered tier-1 families, times the layers and scales the study
+    declares. Twenty was the count of families, not of tests, and the
+    difference decides both the required sample size and whether the
+    permutation count can resolve the correction at all.
+    """
+    from . import registry
+
+    families = sum(1 for e in registry.load().values()
+                   if e.row.get("hypothesis_tier", "").startswith("tier1"))
+    try:
+        m = StudyManifest.load(manifest_path)
+    except Exception:
+        return max(families, 1)
+    return max(families * max(len(m.metal_layers), 1) * max(len(m.scales_um), 1), 1)
+
+
 def cmd_phase0(args) -> int:
     cfg = _load_config(args.config)
     p = cfg.get("phase0", {})
+    # Derive the hypothesis family from the manifest where one is available,
+    # rather than from a default that has no relation to the run. The FDR
+    # family is feature x layer x scale, which is hundreds of rows, not the
+    # twenty the old default assumed.
+    manifest_tier1 = _tier1_family_size(args.config)
     budget = power.HypothesisBudget(
         n_features=p.get("n_features", 25),
         n_layers=p.get("n_layers", 12),
@@ -49,7 +73,7 @@ def cmd_phase0(args) -> int:
         p.get("expected_moran_i", 0.6), p.get("cells_per_patch", 9))
     table = power.sample_size_table(
         budget, design_effect=de,
-        tier1_hypotheses=p.get("tier1_hypotheses", 20),
+        tier1_hypotheses=p.get("tier1_hypotheses", manifest_tier1),
         control_ratio=p.get("control_ratio", 4.0),
         power=p.get("target_power", 0.80))
     floor = power.registration_scale_floor(p.get("position_sigma_um", 50.0))
@@ -140,6 +164,7 @@ def cmd_run(args) -> int:
     from .stats import ablation
 
     manifest = StudyManifest.load(args.manifest)
+    manifest.sample_conditions.validate()
     reader = LayoutReader(args.gds, top_cell=manifest.top_cell)
     manifest.validate_against(reader)
     bbox = manifest.die_bbox(reader)
@@ -161,6 +186,8 @@ def cmd_run(args) -> int:
     failures = load_failures(args.failures)
     for n in failures.notes:
         print(f"  failure import: {n}")
+    for n in manifest.sample_conditions.check_against(failures):
+        print(f"  condition: {n}")
     print(f"  {len(failures)} failures across {failures.n_dies()} die(s); "
           f"modes {failures.modes()}")
 
@@ -210,9 +237,20 @@ def cmd_run(args) -> int:
         line_rules=manifest.line_rule_map(),
         fill_layers=manifest.fill_layers, wide_width_um=manifest.wide_width_um,
         layout_revision=manifest.layout_revision,
+        die_covariates=tuple(manifest.sample_conditions.covariate),
         seed=args.seed,
         allow_pooling_modes=args.allow_pooling_modes,
         allow_failures_outside_footprint=args.allow_failures_outside_footprint)
+
+    # A condition declared stratified is stratified. Requiring the operator to
+    # repeat it on the command line would let a manifest say a condition is
+    # controlled while the run pools across it.
+    stratify_by = list(args.stratify_by or ())
+    for cond in manifest.sample_conditions.stratified:
+        if cond not in stratify_by:
+            stratify_by.append(cond)
+    if stratify_by:
+        args.stratify_by = stratify_by
 
     if args.stratify_by:
         strat = pipeline.run_stratified(
@@ -282,6 +320,12 @@ def cmd_run(args) -> int:
         res.metadata["registration"] = registration_report
 
     print(f"\nanalysed {len(res.associations)} feature x layer x scale combinations")
+    b = res.metadata.get("permutation_budget", {})
+    if b:
+        print(f"  permutation budget: {b['n_permutations']} permutations over "
+              f"{b['n_tests']} corrected tests -> best reachable q "
+              f"{b['best_achievable_q_for_a_lone_result']:.3f}"
+              f"{'' if b['sufficient'] else '  INSUFFICIENT'}")
     for note in res.metadata["uncontrolled_confounding"]:
         print(f"  UNCONTROLLED: {note}")
 

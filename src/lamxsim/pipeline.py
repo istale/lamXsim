@@ -31,6 +31,32 @@ from .features.vias import ViaExtractor
 from .labels import inspection, package_context, position
 from .labels.failure import FailureSet, map_to_grid, map_to_grid_per_die
 from .layout.reader import BBox, LayerSpec, LayoutReader
+from . import registry as registry_mod
+from . import report as report_mod
+from .stats import fdr, permutation, power, univariate
+
+
+def _die_level_covariate(failures, name: str, die_names) -> "np.ndarray | None":
+    """One numeric value per die for a declared condition, or None.
+
+    A condition varying within a die cannot be a die-level covariate; the
+    first value is taken and the discrepancy is reported by
+    SampleConditions.check_against rather than silently averaged.
+    """
+    table = failures.table
+    if name not in table:
+        return None
+    keys = failures.die_keys()
+    per_die = {}
+    for key, group in table.groupby(keys):
+        value = pd.to_numeric(group[name], errors="coerce").dropna()
+        per_die[str(key)] = float(value.iloc[0]) if len(value) else np.nan
+    values = np.array([per_die.get(d, np.nan) for d in die_names], dtype=float)
+    if not np.isfinite(values).any() or np.nanstd(values) == 0:
+        # A covariate that does not vary across the dies analysed explains
+        # nothing and would only add a constant column to the baseline.
+        return None
+    return values
 
 
 def _file_digest(path: str) -> str:
@@ -55,9 +81,6 @@ def _covers(outer, inner, tol: float = 1e-6) -> bool:
 
 def _is_roi(die, geometry, tol: float = 1e-6) -> bool:
     return (die.width > geometry.width + tol or die.height > geometry.height + tol)
-from . import registry as registry_mod
-from . import report as report_mod
-from .stats import fdr, permutation, univariate
 
 #: Hypothesis tiers, sourced from references/feature_evidence_map.csv.
 #: Matching is by prefix so that gradients and layer-qualified cross-layer
@@ -101,6 +124,7 @@ TIER_PREFIXES = (
     ("density_variance_across_layers", "exploratory"),
     ("distance_to_", "tier1_confounder"),
     ("normalized_distance_", "tier1_confounder"),
+    ("condition_", "tier1_confounder"),
     ("bump_", "tier1_confounder"),
     ("under_bump_indicator", "tier1_confounder"),
     ("local_bump_pitch", "tier1_confounder"),
@@ -158,6 +182,7 @@ def run(gds_path: str, failures: FailureSet, *,
         footprint: "inspection.InspectionFootprint | None" = None,
         footprints: "inspection.FootprintSet | None" = None,
         layout_revision: str | None = None,
+        die_covariates: "tuple[str, ...]" = (),
         min_coverage: float = 0.5,
         allow_pooling_modes: bool = False,
         allow_failures_outside_footprint: bool = False,
@@ -359,6 +384,18 @@ def run(gds_path: str, failures: FailureSet, *,
         if include_position:
             for name, v in position.extract(grid, bbox).items():
                 columns.append((name, "-", v, EvidenceClass.PACKAGE_POSITION))
+            # Package and process conditions declared as covariates enter the
+            # baseline the geometry model has to beat. Recording them in the
+            # manifest and then leaving them out of the model would let a
+            # geometry feature absorb their effect, which is the thing the
+            # declaration exists to prevent.
+            for cov in die_covariates:
+                values = _die_level_covariate(failures, cov, die_names)
+                if values is None:
+                    continue
+                columns.append((f"condition_{cov}", "-", values[die_index],
+                                EvidenceClass.SAMPLE_CONDITION))
+
             if package_layers.any_present:
                 ctx = package_context.extract(grid, bbox, reader, package_layers)
                 for name, v in ctx.items():
@@ -480,12 +517,40 @@ def run(gds_path: str, failures: FailureSet, *,
             "layout coordinates (registration/apply.register does this).")
 
     fdr.apply_tiered([a for a, _ in assoc_rows])
+
+    n_corrected = sum(1 for a, _ in assoc_rows
+                      if a.hypothesis_tier.startswith("tier1"))
+    budget = power.permutation_budget(n_corrected, n_permutations)
+    floor_p = budget["min_achievable_p"]
+
     rows = []
     for a, row in assoc_rows:
         row["fdr_q_value"] = a.fdr_q_value
         row["spatial_p_value"] = a.spatial_p_value
         row["spatial_q_value"] = a.spatial_q_value
+        # A p pinned at 1/(n+1) is a bound the permutation count imposed, not
+        # a value the data produced. Marked so a reader does not read it as a
+        # resolved result.
+        row["spatial_p_at_floor"] = bool(
+            np.isfinite(a.spatial_p_value)
+            and a.spatial_p_value <= floor_p + 1e-12)
         rows.append(row)
+    at_floor = sum(1 for a, _ in assoc_rows
+                   if np.isfinite(a.spatial_p_value)
+                   and a.spatial_p_value <= floor_p + 1e-12)
+    budget["n_at_resolution_floor"] = at_floor
+    if n_permutations and not budget["sufficient"]:
+        context_notes.append(
+            f"{n_permutations} permutations cannot resolve a family of "
+            f"{n_corrected} corrected tests: the smallest p a permutation can "
+            f"return is {floor_p:.5f}, so a single result among nulls could "
+            f"reach no better than q = "
+            f"{budget['best_achievable_q_for_a_lone_result']:.3f}. "
+            f"{at_floor} test(s) are sitting at that floor, and their q values "
+            "come from being tied there rather than from being resolved -- "
+            "they are an upper bound on significance, not a measurement of it. "
+            f"Use at least {budget['permutations_needed_for_alpha']} "
+            "permutations, or reduce the hypothesis family.")
 
     if not n_permutations:
         context_notes.append(
@@ -531,6 +596,7 @@ def run(gds_path: str, failures: FailureSet, *,
         "min_trustworthy_scale_um": scale_floor,
         "n_hypotheses_tested": len(rows),
         "n_permutations": n_permutations,
+        "permutation_budget": budget,
         "seed": seed,
         "runtime_s": round(time.time() - t0, 2),
     }
@@ -633,7 +699,8 @@ def _consistency(results: dict[str, RunResult]) -> pd.DataFrame:
         if res.associations.empty:
             continue
         keep = res.associations[["feature", "layer", "scale_um", "effect_size",
-                                 "roc_auc", "fdr_q_value", "n_case"]].copy()
+                                 "roc_auc", "spatial_q_value", "fdr_q_value",
+                                 "n_case"]].copy()
         keep["stratum"] = name
         frames.append(keep)
     if len(frames) < 2:
@@ -656,7 +723,12 @@ def _consistency(results: dict[str, RunResult]) -> pd.DataFrame:
             "effect_min": float(finite.min()), "effect_max": float(finite.max()),
             "effect_spread": float(finite.max() - finite.min()),
             "signs_agree": bool(np.all(signs == signs[0])),
-            "min_q": float(group["fdr_q_value"].min()),
+            # The spatial q, for the same reason the primary table uses it:
+            # a cross-stratum agreement resting on a test that assumed
+            # independent cells is weaker than the single-stratum results it
+            # is summarising.
+            "min_spatial_q": float(group["spatial_q_value"].min()),
+            "min_naive_q": float(group["fdr_q_value"].min()),
             "strata": "; ".join(f"{s}={e:+.3f}" for s, e in
                                 zip(group["stratum"], group["effect_size"])),
         })

@@ -151,3 +151,45 @@ def registration_scale_floor(position_sigma_um: float, factor: float = 3.0) -> d
         "trustworthy_scales_um": [s for s in default_scales if s >= floor],
         "rejected_scales_um": [s for s in default_scales if s < floor],
     }
+
+
+def min_achievable_p(n_permutations: int) -> float:
+    """The smallest p a permutation test can return.
+
+    With ``n`` permutations the observed statistic can at best be the most
+    extreme of ``n + 1`` values, so no p below ``1 / (n + 1)`` exists. A test
+    that cannot produce a small enough p cannot be corrected into
+    significance however strong the effect is.
+    """
+    return 1.0 / (n_permutations + 1)
+
+
+def required_permutations(n_tests: int, alpha: float = 0.05,
+                          rank: int = 1) -> int:
+    """Permutations needed for a test at *rank* to be able to reach *alpha*.
+
+    Benjamini-Hochberg compares the rank-i p-value against ``alpha * i / m``,
+    so the strictest requirement falls on the most significant test. Below
+    this count the spatial correction has a resolution floor above its own
+    threshold, and the strongest possible result is indistinguishable from a
+    marginal one.
+    """
+    threshold = alpha * rank / max(n_tests, 1)
+    return int(np.ceil(1.0 / threshold)) - 1
+
+
+def permutation_budget(n_tests: int, n_permutations: int,
+                       alpha: float = 0.05) -> dict:
+    """Whether the configured permutation count can resolve this family."""
+    floor = min_achievable_p(n_permutations)
+    needed = required_permutations(n_tests, alpha)
+    # With every test tied at the floor, BH still clears alpha at the largest
+    # rank; the binding case is one strong result among mostly-null ones.
+    best_q = floor * n_tests
+    return {
+        "n_tests": n_tests, "n_permutations": n_permutations,
+        "min_achievable_p": floor,
+        "best_achievable_q_for_a_lone_result": min(best_q, 1.0),
+        "permutations_needed_for_alpha": needed,
+        "sufficient": bool(best_q <= alpha),
+    }

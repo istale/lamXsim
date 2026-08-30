@@ -183,4 +183,4 @@ def test_summary_states_what_the_result_is_not(tmp_path):
 def test_empty_associations_partition_without_raising():
     parts = report.partition(pd.DataFrame())
     assert all(len(v) == 0 for v in parts.values())
-    assert "no primary result" in report.format_primary(pd.DataFrame())
+    assert "no primary hypothesis survived" in report.format_primary(pd.DataFrame())

@@ -170,8 +170,11 @@ without pretending to know hidden physics. Status verified against the code.
 9. **Done.** `lamxsim run --ablation` fits the position baseline and the nested
    feature families under leave-one-die-out folds when more than one die is
    present, and says so when there is only one.
-10. **Done.** Results are partitioned into primary, confounders, exploratory,
-    unsupported_scale and underpowered. `best_features.csv` no longer exists.
+10. **Done.** Results are partitioned into supported, primary, confounders,
+    exploratory, unsupported_scale, underpowered, not_spatially_corrected and
+    not_traceable. `supported` is the findings; `primary` is the
+    pre-specified hypothesis set that was corrected over and contains rows at
+    q = 1 by construction. `best_features.csv` no longer exists.
 
 ### A'. Remaining, in the order they change a conclusion
 
@@ -232,7 +235,13 @@ variation. The minimum remedy is to stratify or hold out those conditions.
 
 ### Gate 3 - association is not position/package leakage
 
-- Die-corner and, when available, bump-relative baselines are included.
+- Die-corner and, when available, bump-relative baselines are included, along
+  with every package/process condition declared a covariate.
+- Significance is corrected from the within-die block permutation
+  (`spatial_q_value`), not from a test that assumes independent cells.
+- The permutation count can resolve the correction: with a family of m tests
+  the smallest reachable q is `m / (n_permutations + 1)`, so 999 permutations
+  cannot clear alpha on a family of 240.
 - Spatial null tests and negative controls pass.
 - Geometry adds information beyond the baseline under the same folds.
 

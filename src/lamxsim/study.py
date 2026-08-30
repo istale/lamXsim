@@ -74,6 +74,76 @@ class SampleConditions:
         return [c for c in PACKAGE_PROCESS_CONDITIONS
                 if self.status(c) == "unknown"]
 
+    def validate(self) -> None:
+        """Reject a condition claimed in more than one way."""
+        seen: dict[str, list[str]] = {}
+        for role, names in (("fixed", tuple(self.fixed)),
+                            ("stratified", self.stratified),
+                            ("covariate", self.covariate)):
+            for name in names:
+                seen.setdefault(name, []).append(role)
+        clashes = {k: v for k, v in seen.items() if len(v) > 1}
+        if clashes:
+            raise ValueError(
+                f"each package/process condition takes exactly one role; "
+                f"{clashes} are claimed in more than one. A condition cannot "
+                "be held fixed and stratified at the same time.")
+
+    def check_against(self, failures) -> list[str]:
+        """Check the declarations against the failure table.
+
+        The software cannot measure EMC thickness, so it cannot verify that a
+        condition declared fixed really was. What it can check is that the
+        declaration is not contradicted by the data in hand: a condition said
+        to be fixed that varies across the file, and one said to be
+        stratified or a covariate with no column to read.
+        """
+        notes: list[str] = []
+        table = failures.table
+        die_keys = failures.die_keys()
+
+        for name, value in self.fixed.items():
+            if name not in table:
+                notes.append(
+                    f"{name} is declared fixed at {value!r} but the failure "
+                    "file carries no such column, so nothing contradicts it "
+                    "and nothing confirms it either")
+                continue
+            observed = sorted(table[name].dropna().astype(str).unique())
+            if len(observed) > 1:
+                raise ValueError(
+                    f"{name} is declared fixed at {value!r} but the failure "
+                    f"file contains {observed}. Either the declaration is "
+                    "wrong or the study spans conditions it says it does not.")
+            if observed and observed[0] != str(value):
+                notes.append(
+                    f"{name} is declared fixed at {value!r} but the file "
+                    f"reports {observed[0]!r}")
+
+        for role, names in (("stratified", self.stratified),
+                            ("covariate", self.covariate)):
+            for name in names:
+                if name not in table:
+                    raise ValueError(
+                        f"{name} is declared as a {role} but the failure file "
+                        "has no such column. A condition that cannot be read "
+                        "cannot be controlled for.")
+                if table[name].isna().any():
+                    notes.append(
+                        f"{name} is missing on "
+                        f"{int(table[name].isna().sum())} failure(s); those "
+                        "rows cannot be assigned to a stratum or given a "
+                        "covariate value")
+                if role == "covariate":
+                    per_die = table.groupby(die_keys)[name].nunique()
+                    varying = per_die[per_die > 1]
+                    if len(varying):
+                        notes.append(
+                            f"{name} varies within {len(varying)} die(s); it "
+                            "is being used as a die-level covariate, so the "
+                            "within-die variation is discarded")
+        return notes
+
     def report(self) -> dict:
         return {"by_condition": {c: self.status(c)
                                  for c in PACKAGE_PROCESS_CONDITIONS},

@@ -12,6 +12,11 @@ from enum import Enum
 class EvidenceClass(str, Enum):
     GDS_GEOMETRY = "GDS_GEOMETRY"
     PACKAGE_POSITION = "PACKAGE_POSITION"
+    #: Package and process conditions -- EMC thickness, underfill CTE, thermal
+    #: cycle, dielectric stack. Not in the GDS and not a position, but they
+    #: change the crack driving force, so they belong in the baseline a
+    #: geometry model has to beat rather than in the geometry model itself.
+    SAMPLE_CONDITION = "SAMPLE_CONDITION"
     MEASURED_FAILURE = "MEASURED_FAILURE"
     STATISTICAL_ASSOCIATION = "STATISTICAL_ASSOCIATION"
     ML_PREDICTION = "ML_PREDICTION"
@@ -26,7 +31,8 @@ GEOMETRY_MODEL_CLASSES = frozenset({EvidenceClass.GDS_GEOMETRY})
 #: Feature families that may enter the *position-only baseline* model.
 #: Keeping these apart is what makes "does geometry add anything beyond
 #: die position?" an answerable question (see stats.baseline).
-POSITION_MODEL_CLASSES = frozenset({EvidenceClass.PACKAGE_POSITION})
+POSITION_MODEL_CLASSES = frozenset({EvidenceClass.PACKAGE_POSITION,
+                                    EvidenceClass.SAMPLE_CONDITION})
 
 
 class EvidenceMixingError(RuntimeError):

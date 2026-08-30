@@ -641,6 +641,32 @@ generation, GDS back-annotation) stay closed until a real study shows
 deterministic geometry carries signal. An effective-stiffness proxy was
 evaluated and rejected as provably redundant -- see above.
 
+## The hypothesis set is not the findings
+
+`primary.csv` is every combination the study committed to testing, corrected
+together. It contains rows at q = 1 by construction, and a file read as "the
+results" must not. `supported.csv` is the subset whose spatially corrected q
+clears 0.05 with an interval excluding chance, and it is what the console
+prints.
+
+## The permutation count has to reach the threshold
+
+A permutation test cannot return a p below `1 / (n + 1)`, so with m tests
+corrected together the smallest reachable q for a lone result is
+`m / (n + 1)`. The default of 999 permutations is fine for a family of 20 and
+useless for the family a real run produces:
+
+| corrected tests | permutations | best reachable q | enough? |
+|---|---|---|---|
+| 20 | 999 | 0.020 | yes |
+| **240** | **999** | **0.240** | **no** |
+| 240 | 9,999 | 0.024 | yes |
+
+A two-layer run over six scales corrects roughly 240 tests, so the shipped
+default could not have produced a significant spatial result however strong
+the effect. The run now computes this and says so, and Phase 0 derives the
+family size from the manifest instead of assuming twenty.
+
 ## Reproducing the test result
 
 `pyproject.toml` declares the bounds; `constraints-verified.txt` records the

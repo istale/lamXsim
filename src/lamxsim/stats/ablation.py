@@ -46,8 +46,15 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         r"^density_variance_across_layers$", r"^top_to_underlying"),
 }
 
-#: The mandatory reference model. Geometry is only interesting relative to it.
-POSITION_FAMILY = (r"^distance_to_", r"^normalized_distance_")
+#: Name of the mandatory reference model, referred to by tests and reports.
+BASELINE_NAME = "P_position_and_conditions"
+
+#: The mandatory reference model. Geometry is only interesting relative to it,
+#: and that includes the package and process conditions declared as
+#: covariates: leaving them out lets a geometry feature absorb their effect.
+POSITION_FAMILY = (r"^distance_to_", r"^normalized_distance_", r"^bump_",
+                   r"^under_bump_indicator$", r"^local_bump_pitch$",
+                   r"^condition_")
 
 
 @dataclass
@@ -93,7 +100,7 @@ def run(frame: pd.DataFrame, y: np.ndarray, folds, *,
             "no PACKAGE_POSITION columns present; without the position-only "
             "baseline a geometry AUC cannot be interpreted")
     baseline = evaluate(frame[pos_cols].to_numpy(float), y, folds,
-                        name="P_position_only", feature_names=pos_cols,
+                        name=BASELINE_NAME, feature_names=pos_cols,
                         evidence_class=EvidenceClass.PACKAGE_POSITION, C=C)
     scores.append(baseline)
 

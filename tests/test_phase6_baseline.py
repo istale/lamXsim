@@ -112,7 +112,7 @@ def test_ablation_localises_where_the_information_enters(die):
         "families added after perimeter should not improve on it here"
     )
 
-    baseline = next(s for s in out.scores if s.name == "P_position_only")
+    baseline = next(s for s in out.scores if s.name == ablation.BASELINE_NAME)
     assert abs(baseline.roc_auc - 0.5) < 0.10, (
         "the validation die has no position effect; a position baseline well "
         "away from chance means the folds or the labels are wrong"
