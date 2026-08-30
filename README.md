@@ -97,7 +97,7 @@ maps are what a DRC engine does natively. Generate the deck, run it, and point
 `characterize` at the output:
 
 ```bash
-PYTHONPATH=src python3 -m lamxsim deck --manifest layers.yaml --outdir deck
+PYTHONPATH=src python3 -m lamxsim deck chip.gds --manifest layers.yaml --outdir deck
 # run deck/rules.svrf in Calibre, then
 PYTHONPATH=src python3 -m lamxsim characterize chip.gds \
   --manifest layers.yaml --features-from deck
@@ -117,6 +117,18 @@ alignment, not enough to test Calibre. `--emulate` on the `deck` command
 produces that output without a licence, and anything derived from it is labelled
 as emulated. Run the deck against the real tool once and diff it before
 reporting a production number.
+
+Three gates stand between a deck run and an atlas. The output must be
+**complete** for every layer and scale the manifest asks for -- a missing map
+is not a smaller Calibre run, it is a Python map wearing a Calibre label. The
+deck's minimum-width guard must have run and come back **empty** -- eps is a
+quarter of the declared minimum width and the inside band collapses silently
+once eps passes half the real one, so this is a gate and not a note for the
+operator. And the output must be **bound to this layout**: the deck records the
+GDS digest, top cell and bounding box, because a complete set of RDBs from
+another revision of the same design has the same layer names, the same scales
+and the same coordinates, and would otherwise be mixed with orientation and
+package-context maps computed from a different chip.
 
 Two things the deck deliberately does not do. It does not produce the line-end
 count: no SVRF primitive defines a line end on merged geometry, the

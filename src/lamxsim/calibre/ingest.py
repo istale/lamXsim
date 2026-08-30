@@ -433,6 +433,62 @@ class CalibreSource:
                 return bool(entry["is_via"])
         raise KeyError(layer)
 
+    def check_binding(self, gds_path: str, reader, manifest) -> dict:
+        """Refuse deck output that was not produced from this layout.
+
+        The completeness gate establishes that a full set of maps is present.
+        It says nothing about *which* layout they describe: a complete set
+        from another revision of the same design has the same layer names, the
+        same scales and the same coordinates, so it passes every other check
+        and is then mixed with the orientation, gradient and package-context
+        maps computed from the file actually loaded. The result is internally
+        consistent and describes two different chips.
+        """
+        from ..pipeline import _file_digest
+
+        binding = self.manifest.get("binding") or {}
+        if not binding.get("gds_sha256"):
+            raise ValueError(
+                f"{self.directory}/extraction_manifest.json carries no layout "
+                "binding, so nothing establishes that these maps came from "
+                f"{gds_path} rather than from another revision with the same "
+                "layer names. Regenerate the deck with `lamxsim deck <gds>`, "
+                "which records the layout digest, top cell and bounding box.")
+
+        actual = {
+            "gds_sha256": _file_digest(gds_path),
+            "top_cell": reader.top.name,
+        }
+        bbox = reader.bbox()
+        actual_bbox = [bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax]
+
+        problems = []
+        if binding["gds_sha256"] != actual["gds_sha256"]:
+            problems.append(
+                f"layout digest: deck ran on {binding['gds_sha256'][:12]}..., "
+                f"this file is {actual['gds_sha256'][:12]}...")
+        if binding.get("top_cell") and binding["top_cell"] != actual["top_cell"]:
+            problems.append(f"top cell: deck used {binding['top_cell']!r}, "
+                            f"this run uses {actual['top_cell']!r}")
+        declared_bbox = binding.get("geometry_bbox_um")
+        if declared_bbox and any(abs(a - b) > 1e-6 for a, b
+                                 in zip(declared_bbox, actual_bbox)):
+            problems.append(f"geometry bbox: deck saw {declared_bbox}, "
+                            f"this run sees {actual_bbox}")
+        revision = binding.get("layout_revision") or ""
+        if revision and manifest.layout_revision and \
+                revision != manifest.layout_revision:
+            problems.append(f"layout revision: deck recorded {revision!r}, "
+                            f"the manifest says {manifest.layout_revision!r}")
+        if problems:
+            raise ValueError(
+                f"the deck output in {self.directory} was not produced from "
+                "this layout:\n  " + "\n  ".join(problems)
+                + "\nThe density maps would describe one layout and the "
+                  "orientation, gradient and package-context maps another, "
+                  "with nothing in the output saying so. Re-run the deck.")
+        return binding
+
     def check_complete(self, layers, scales_um) -> None:
         """Refuse a run that would mix the two extractors without saying so.
 

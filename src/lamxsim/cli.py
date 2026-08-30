@@ -225,9 +225,17 @@ def cmd_deck(args) -> int:
 
     manifest = StudyManifest.load(args.manifest)
     layers = svrf.layers_from_manifest(manifest)
+    # The deck is bound to the layout it was generated for. Without that, a
+    # complete set of RDBs from another revision of the same design passes
+    # every check and is then mixed with maps computed from this one.
+    binding = svrf.binding_for(args.gds, manifest, args.manifest)
     paths = svrf.write_deck(args.outdir, layers, scales_um=manifest.scales_um,
-                            step_ratio=args.step_ratio)
+                            step_ratio=args.step_ratio, binding=binding)
 
+    print(f"layout : {args.gds}")
+    print(f"  top cell : {binding['top_cell']}")
+    print(f"  sha256   : {binding['gds_sha256'][:16]}...")
+    print(f"  bbox     : {binding['geometry_bbox_um']} um")
     print(f"layers : {', '.join(str(l.name) for l in layers)}")
     print(f"scales : {list(manifest.scales_um)} um   STEP = WINDOW x "
           f"{args.step_ratio:g}")
@@ -242,15 +250,16 @@ def cmd_deck(args) -> int:
     if args.emulate:
         from .calibre import emulate
 
-        run = emulate.run(args.emulate, layers, scales_um=manifest.scales_um,
-                          step_ratio=args.step_ratio, outdir=args.outdir)
+        run = emulate.run(args.gds, layers, scales_um=manifest.scales_um,
+                          step_ratio=args.step_ratio, outdir=args.outdir,
+                          manifest=manifest, manifest_path=args.manifest)
         print(f"\nemulated {len(run.density)} density scan(s) and "
               f"{len(run.markers)} marker file(s) into {args.outdir}")
         print("These are KLayout results shaped like deck output, for testing "
               "the ingest path. They are NOT Calibre results; anything derived "
               "from them says so.")
 
-    print("\nRun the deck, then: lamxsim characterize <gds> --manifest "
+    print(f"\nRun the deck, then: lamxsim characterize {args.gds} --manifest "
           f"{args.manifest} --features-from {args.outdir}")
     print("The eps guard checks must come back empty. A non-empty one means "
           "the layout is narrower than the manifest says and every perimeter "
@@ -658,6 +667,10 @@ def main(argv=None) -> int:
     ch.set_defaults(func=cmd_characterize)
 
     dk = sub.add_parser("deck", help="generate the Calibre rule deck")
+    dk.add_argument("gds", help="the layout this deck is for. Its digest, top "
+                                "cell and bounding box are recorded, and "
+                                "characterize refuses deck output whose "
+                                "binding does not match the layout it loads.")
     dk.add_argument("--manifest", default="config/study_manifest.yaml")
     dk.add_argument("--outdir", default="calibre_deck")
     dk.add_argument("--step-ratio", type=float, default=1.0,
@@ -665,7 +678,7 @@ def main(argv=None) -> int:
                          "non-overlapping). The atlas grids do not overlap, so "
                          "a deck stepped differently is refused rather than "
                          "re-binned onto cells it was not measured on.")
-    dk.add_argument("--emulate", metavar="GDS",
+    dk.add_argument("--emulate", action="store_true",
                     help="also produce emulated output for this layout, so the "
                          "ingest path can be exercised without a Calibre "
                          "licence. The result is labelled as emulated.")

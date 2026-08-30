@@ -156,6 +156,10 @@ def _score(channel, inputs, n_cells, die_frame_declared, no_frame_reason):
             inputs_used=(), available=False, reason=no_frame_reason)
 
     mask, note = exposure.condition_mask(channel, inputs, n_cells)
+    if mask is None:
+        return exposure.ChannelResult(
+            channel=channel, percentile=np.full(n_cells, np.nan),
+            inputs_used=(), available=False, reason=note)
     result = exposure.evaluate(channel, inputs, n_cells,
                                mask=None if not channel.conditional_on else mask)
     if note:
@@ -211,6 +215,7 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
                 "manifest analyses them, so they would fall back to the "
                 "KLayout extractor while the run reported itself as a deck "
                 "extraction.")
+        calibre.check_binding(gds_path, reader, manifest)
         calibre.check_complete(wanted, manifest.scales_um)
         eps_guard = calibre.check_eps_guard(wanted)
 
@@ -297,6 +302,7 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
             "directory": str(calibre_dir),
             "emulated": calibre.emulated,
             "generator": calibre.manifest.get("generator", ""),
+            "binding": calibre.manifest.get("binding", {}),
             "eps_um": {l: calibre.eps_um(l) for l in calibre.layers()},
             "eps_guard_violations": eps_guard,
             "features_taken": {l: v for l, v in calibre_provenance.items()},

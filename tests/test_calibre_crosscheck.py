@@ -344,3 +344,82 @@ def test_the_guard_uses_the_projected_metric(tmp_path):
     assert region.width_check(w, False, db.Region.Projection).count() == 0
     half = reader.units.um_to_dbu(0.1)
     assert (region - region.sized(-half).sized(half)).count() == 0
+
+
+def test_every_deck_output_path_is_a_real_path(tmp_path):
+    """The emulator writes files directly, so it cannot see a bad deck path.
+
+    EPS_VIOLATION_* was emitted with a literal ``{outdir}`` -- an f-string
+    brace escaped one level too far -- while every other DFM RDB line expanded
+    correctly. On a real Calibre run the guard would have landed in a
+    directory named ``{outdir}`` and the ingest gate would have refused every
+    run for a missing file. The whole suite passed, because nothing read the
+    generated text.
+    """
+    from lamxsim.calibre import svrf
+
+    manifest = StudyManifest.load(str(GOLDEN / "golden_manifest.yaml"))
+    results = str(tmp_path / "results")
+    deck = svrf.generate(_layers(manifest), scales_um=tuple(manifest.scales_um),
+                         outdir=results)
+
+    rdb_lines = [l for l in deck.splitlines() if l.startswith("DFM RDB ")]
+    assert rdb_lines, "the deck writes nothing out"
+    for line in rdb_lines:
+        assert "{" not in line and "}" not in line, line
+        assert results in line, line
+    # and the guard is among them, since that is the one that was wrong
+    assert any("eps_violation_M8.rdb" in l for l in rdb_lines)
+
+
+def test_deck_output_from_another_layout_is_refused(tmp_path):
+    """A complete set from another revision passes every other check.
+
+    Same layer names, same scales, same coordinates -- so the completeness
+    gate is satisfied, and the density maps would then be mixed with
+    orientation, gradient and package-context maps computed from the layout
+    actually loaded. The result is internally consistent and describes two
+    different chips.
+    """
+    import klayout.db as db
+
+    from lamxsim import atlas as atlas_mod
+
+    manifest = StudyManifest.load(str(GOLDEN / "golden_manifest.yaml"))
+    gds = str(GOLDEN / "golden_die.gds")
+    out = tmp_path / "deck"
+    emulate.run(gds, _layers(manifest), scales_um=tuple(manifest.scales_um),
+                step_ratio=1.0, outdir=out, manifest=manifest)
+    atlas_mod.build(gds, manifest, calibre_dir=str(out))       # matching: fine
+
+    # A revision of the same design: same top cell, same bounding box, same
+    # layers, one shape different. Every check other than the binding passes.
+    layout = db.Layout()
+    layout.read(gds)
+    top = layout.top_cell()
+    top.shapes(layout.layer(8, 0)).insert(db.Box(700000, 700000, 700400, 700400))
+    other = tmp_path / "revision.gds"
+    layout.write(str(other))
+
+    with pytest.raises(ValueError, match="not produced from this layout"):
+        atlas_mod.build(str(other), manifest, calibre_dir=str(out))
+
+
+def test_deck_output_with_no_binding_at_all_is_refused(tmp_path):
+    """Absence of a binding is not a pass."""
+    import json
+
+    from lamxsim import atlas as atlas_mod
+
+    manifest = StudyManifest.load(str(GOLDEN / "golden_manifest.yaml"))
+    gds = str(GOLDEN / "golden_die.gds")
+    out = tmp_path / "deck"
+    emulate.run(gds, _layers(manifest), scales_um=tuple(manifest.scales_um),
+                step_ratio=1.0, outdir=out, manifest=manifest)
+
+    side = out / "extraction_manifest.json"
+    data = json.loads(side.read_text())
+    data["binding"] = {}
+    side.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="no layout binding"):
+        atlas_mod.build(gds, manifest, calibre_dir=str(out))

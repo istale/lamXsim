@@ -286,3 +286,23 @@ def test_die_relative_channels_need_a_declared_die_outline(tmp_path):
     reasons = {r.reason for cs in result.channels.values() for _, r in cs
                if r.channel.channel_id in needs_frame}
     assert any("no die_outline_um" in r for r in reasons)
+
+
+def test_a_channel_whose_condition_is_unavailable_is_refused_not_widened():
+    """Widening is the same error as never conditioning, from the other side.
+
+    The channel would be scored across the whole die and reported under a
+    citation that is about one region of it. Refusing says less and says it
+    accurately.
+    """
+    channel = next(c for c in exposure.CHANNELS if c.conditional_on)
+    features = {name: np.linspace(0.0, 1.0, 25) for name in channel.inputs}
+    assert channel.conditional_on not in features
+
+    mask, reason = exposure.condition_mask(channel, features, 25)
+    assert mask is None
+    assert channel.conditional_on in reason
+
+    results = {r.channel.channel_id: r
+               for r in exposure.evaluate_all(features, 25)}
+    assert results[channel.channel_id].available is False

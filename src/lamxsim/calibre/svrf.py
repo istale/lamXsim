@@ -144,7 +144,7 @@ def _eps_guard(layers, outdir) -> str:
         out.append("  // tool -- this deck has not been run on Calibre.")
         out.append("}")
         out.append(f'DFM RDB EPS_VIOLATION_{l.name} '
-                   f'"{{outdir}}/eps_violation_{l.name}.rdb" ALL CELLS\n')
+                   f'"{outdir}/eps_violation_{l.name}.rdb" ALL CELLS\n')
     return "\n".join(out)
 
 
@@ -316,8 +316,35 @@ def eps_report(layers) -> list[dict]:
     } for l in layers if not l.is_via]
 
 
+def binding_for(gds_path: str, manifest, manifest_path: str | None = None,
+                *, top_cell: str | None = None) -> dict:
+    """What this deck run is bound to, so its output cannot be reused blind.
+
+    A complete set of RDBs from a different revision of the same design --
+    same layer names, same scales, same coordinates -- would pass every
+    completeness check and then be mixed with orientation, gradients and
+    package context computed from the layout actually loaded. The maps would
+    be internally consistent and describe two different chips.
+    """
+    from ..layout.reader import LayoutReader
+    from ..pipeline import _file_digest
+
+    reader = LayoutReader(gds_path, top_cell=top_cell or manifest.top_cell)
+    bbox = reader.bbox()
+    out = {
+        "gds_sha256": _file_digest(gds_path),
+        "top_cell": reader.top.name,
+        "geometry_bbox_um": [bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax],
+        "layout_revision": manifest.layout_revision or "",
+    }
+    if manifest_path:
+        out["study_manifest_sha256"] = _file_digest(str(manifest_path))
+    return out
+
+
 def extraction_manifest(layers: list[CalibreLayer], scales_um, step_ratio: float,
-                        outdir: str = "./calibre_out") -> dict:
+                        outdir: str = "./calibre_out",
+                        binding: dict | None = None) -> dict:
     """The sidecar the ingest side needs, and cannot guess.
 
     ``eps`` in particular: a band density divided by the wrong eps is wrong by
@@ -336,12 +363,14 @@ def extraction_manifest(layers: list[CalibreLayer], scales_um, step_ratio: float
                     "eps_um": (0.0 if l.is_via else l.eps_um),
                     "via_area_um2": l.via_area_um2} for l in layers],
         "verified_against": "lamxsim.calibre.emulate (KLayout), not Calibre",
+        "binding": dict(binding or {}),
     }
 
 
 def write_deck(outdir, layers: list[CalibreLayer], *,
                scales_um=(25, 50, 100, 250, 500, 1000),
-               step_ratio: float = 0.5, results_dir: str | None = None) -> dict:
+               step_ratio: float = 0.5, results_dir: str | None = None,
+               binding: dict | None = None) -> dict:
     """Write ``rules.svrf`` and its extraction manifest. Returns the paths."""
     import json
     from pathlib import Path
@@ -354,7 +383,8 @@ def write_deck(outdir, layers: list[CalibreLayer], *,
                              step_ratio=step_ratio, outdir=results))
     side = out / "extraction_manifest.json"
     side.write_text(json.dumps(
-        extraction_manifest(layers, scales_um, step_ratio, results), indent=2))
+        extraction_manifest(layers, scales_um, step_ratio, results, binding),
+        indent=2))
     return {"deck": str(deck), "extraction_manifest": str(side)}
 
 

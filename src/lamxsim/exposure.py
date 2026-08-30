@@ -258,14 +258,25 @@ def _residualise(target: np.ndarray, explained_by: np.ndarray) -> np.ndarray:
 
 
 def condition_mask(channel: Channel, features: dict[str, np.ndarray],
-                   n_cells: int) -> "tuple[np.ndarray, str]":
-    """Cells where the channel's literature conditioning holds."""
+                   n_cells: int) -> "tuple[np.ndarray | None, str]":
+    """Cells where the channel's literature conditioning holds.
+
+    Returns ``None`` for the mask when the channel declares a condition whose
+    feature is not available: the channel cannot be scored as its citation
+    describes, and the caller must refuse it rather than widen it.
+    """
     if not channel.conditional_on:
         return np.ones(n_cells, dtype=bool), ""
     if channel.conditional_on not in features:
-        return np.ones(n_cells, dtype=bool), (
-            f"conditioning feature {channel.conditional_on} unavailable, so "
-            "the channel is reported die-wide and is broader than its citation")
+        # Not a fallback. Widening to the whole die answers a broader question
+        # than the citation asked, under the citation's name -- the same
+        # failure as scoring the condition and not applying it, arrived at
+        # from the other side. The channel is refused instead.
+        return None, (
+            f"the conditioning feature {channel.conditional_on} is not "
+            "available, and this channel's citation is about the region that "
+            "feature defines. Scoring it die-wide would report a broader "
+            "claim than the reference supports")
     gate = _percentile_rank(features[channel.conditional_on],
                             two_sided=False, invert=channel.conditional_invert)
     return (np.isfinite(gate) & (gate >= channel.conditional_percentile)), ""
@@ -343,6 +354,11 @@ def evaluate_all(features: dict[str, np.ndarray], n_cells: int
     out = []
     for channel in CHANNELS:
         mask, note = condition_mask(channel, features, n_cells)
+        if mask is None:
+            out.append(ChannelResult(
+                channel=channel, percentile=np.full(n_cells, np.nan),
+                inputs_used=(), available=False, reason=note))
+            continue
         result = evaluate(channel, features, n_cells,
                           mask=None if not channel.conditional_on else mask)
         if note:

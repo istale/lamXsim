@@ -31,6 +31,7 @@ import numpy as np
 from ..features import corners as corners_mod
 from ..features.grid import Grid, build_grid
 from ..layout.reader import LayerSpec, LayoutReader
+from ..pipeline import _file_digest
 from . import svrf as svrf_mod
 from .svrf import CalibreLayer
 
@@ -118,7 +119,8 @@ def run(gds_path: str, layers: list[CalibreLayer], *,
         scales_um=(100.0,), step_ratio: float = 0.5,
         outdir: str | Path = "calibre_out",
         min_width_um: dict[str, float] | None = None,
-        top_cell: str | None = None) -> EmulatedRun:
+        top_cell: str | None = None, manifest=None,
+        manifest_path: str | None = None) -> EmulatedRun:
     """Emulate the deck over *gds_path* and write its outputs to *outdir*."""
     reader = LayoutReader(gds_path, top_cell=top_cell)
     u = reader.units
@@ -201,7 +203,16 @@ def run(gds_path: str, layers: list[CalibreLayer], *,
     # The same sidecar the real deck writes, so the ingest side reads one
     # format and cannot tell an emulated run from a real one by accident --
     # it is told, by the "emulated" flag, which is the honest way round.
-    side = svrf_mod.extraction_manifest(layers, scales_um, step_ratio, str(out))
+    binding = {
+        "gds_sha256": _file_digest(gds_path),
+        "top_cell": reader.top.name,
+        "geometry_bbox_um": [bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax],
+        "layout_revision": (manifest.layout_revision or "") if manifest else "",
+    }
+    if manifest_path:
+        binding["study_manifest_sha256"] = _file_digest(str(manifest_path))
+    side = svrf_mod.extraction_manifest(layers, scales_um, step_ratio, str(out),
+                                        binding)
     side["generator"] = "lamxsim.calibre.emulate"
     side["emulated"] = True
     (out / "extraction_manifest.json").write_text(json.dumps(side, indent=2))
