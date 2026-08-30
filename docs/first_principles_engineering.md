@@ -154,12 +154,13 @@ without pretending to know hidden physics. Status verified against the code.
 4. **Done.** Explicit die-outline and top-cell configuration, and the declared
    outline now sets the position origin. Geometry bounding box, declared die and
    inspection footprint are three separate frames.
-5. **Partly.** Bump, PI-opening, crackstop and pad context are extracted, with
-   distances measured to the boundary of each shape. Seal ring, slotting,
-   dummy fill and wide-metal discontinuity are not feature families yet.
-6. **Partly.** Bump-relative radial and tangential offsets exist. Routing
-   *orientation* relative to the bump radial direction does not, so Rabie's
-   diagonal final-metal lever cannot be tested directly.
+5. **Done.** Bump, PI-opening, crackstop and pad context are extracted, with
+   distances measured to the boundary of each shape. Wide metal, slotting and
+   declared dummy fill are their own feature family.
+6. **Done.** Bump-relative radial and tangential offsets, plus the routing
+   direction resolved against the bump radial direction. Rabie's diagonal
+   final-metal lever has a feature of its own -- `routing_diagonality` peaks
+   at 45 degrees, where both the radial and tangential cases sit at zero.
 7. **Done.** Line rules are applied per layer, and `min_width_um` opens the
    layer before detection so a cap narrower than the drawn minimum is not read
    as a tip.
@@ -174,14 +175,12 @@ without pretending to know hidden physics. Status verified against the code.
 
 ### A'. Remaining, in the order they change a conclusion
 
-1. Routing orientation relative to the bump radial direction, PI-opening shape
-   descriptors, pad overlap fraction.
-2. Seal ring, slotting, dummy fill and wide-metal discontinuity as families.
-3. Per-die inspection footprints, and an explicit assertion that every die
+1. PI-opening shape descriptors and pad overlap fraction.
+2. Per-die inspection footprints, and an explicit assertion that every die
    shares the layout revision being analysed.
-4. `failed_layer` and `failed_interface` used to stratify rather than only to
+3. `failed_layer` and `failed_interface` used to stratify rather than only to
    refuse pooling.
-5. A traceability matrix from literature to mechanism to GDS observable to
+4. A traceability matrix from literature to mechanism to GDS observable to
    unidentifiable parameter to statistical test.
 
 ### B. Not recoverable from ordinary GDS

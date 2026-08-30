@@ -42,6 +42,8 @@ class StudyManifest:
     via_layers: dict[str, LayerSpec] = field(default_factory=dict)
     package_layers: PackageLayers = field(default_factory=PackageLayers)
     line_rules: dict[str, LineRule] = field(default_factory=dict)
+    fill_layers: dict[str, LayerSpec] = field(default_factory=dict)
+    wide_width_um: float = 3.0
     top_cell: str | None = None
     die_outline_um: list[float] | None = None
     footprint_spec: dict = field(default_factory=dict)
@@ -97,6 +99,11 @@ class StudyManifest:
         if not (layout.get("via_layers") or {}):
             gaps.append("no via_layers: via density is a tier-1 feature "
                         "(Vanstreels 2020, Zahedmanesh 2019) and will be absent")
+        if not (layout.get("fill_layers") or {}):
+            gaps.append(
+                "no fill_layers: dummy fill cannot be separated from functional "
+                "geometry, so it contributes to every density and sets the "
+                "shortest edge on the layer")
         if not reg.get("fiducials"):
             gaps.append(
                 "no registration fiducials: positional uncertainty must come "
@@ -107,6 +114,9 @@ class StudyManifest:
             metal_layers=metals,
             via_layers={k: _spec(v) for k, v in
                         (layout.get("via_layers") or {}).items() if v},
+            fill_layers={k: _spec(v) for k, v in
+                         (layout.get("fill_layers") or {}).items() if v},
+            wide_width_um=float(layout.get("wide_width_um", 3.0)),
             package_layers=package, line_rules=rules,
             top_cell=layout.get("top_cell"),
             die_outline_um=layout.get("die_outline_um"),
@@ -128,6 +138,7 @@ class StudyManifest:
         missing = []
         named = ([(m, "metal") for m in self.metal_layers]
                  + [(v, f"via for {k}") for k, v in self.via_layers.items()]
+                 + [(v, f"fill for {k}") for k, v in self.fill_layers.items()]
                  + [(v, f"package/{k}") for k, v in vars(self.package_layers).items()
                     if v is not None])
         for spec, role in named:
@@ -178,6 +189,8 @@ class StudyManifest:
             "source": self.source,
             "metal_layers": [str(m) for m in self.metal_layers],
             "via_layers": {k: str(v) for k, v in self.via_layers.items()},
+            "fill_layers": {k: str(v) for k, v in self.fill_layers.items()},
+            "wide_width_um": self.wide_width_um,
             "package_layers": {k: (str(v) if v else None)
                                for k, v in vars(self.package_layers).items()},
             "line_rules": {k: vars(v) for k, v in self.line_rules.items()},

@@ -477,3 +477,37 @@ def packaged_die(path: str, *, die_um: float = 3000.0, block_um: float = 100.0,
     crackstop_ring(sl, 62, die_um)
     sl.write(path)
     return path, bumps
+
+
+def radial_routing_die(path: str, *, die_um: float = 3000.0,
+                       block_um: float = 150.0, bump_pitch: float = 500.0,
+                       bump_size: float = 180.0, seed: int = 41,
+                       pitch_um: float = 6.0, density: float = 0.5):
+    """A die where routing direction, not density, varies with the bump frame.
+
+    Every block carries the same metal density and pitch; only the direction
+    changes, drawn from a random field that is independent of position. Blocks
+    are therefore identical in every scalar feature the engine has, and differ
+    only once the routing direction is resolved against the direction of the
+    nearest bump -- which is what Rabie's diagonal final-metal recommendation
+    is about.
+
+    Returns (path, bumps, block_direction) where block_direction is the drawn
+    orientation of each block in radians.
+    """
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    n = int(die_um // block_um)
+    choice = rng.integers(0, 2, (n, n))          # horizontal or vertical
+    sl = SynthLayout()
+    for j in range(n):
+        for i in range(n):
+            x0, y0 = i * block_um, j * block_um
+            lines(sl, 8, x0, y0, x0 + block_um, y0 + block_um,
+                  pitch=pitch_um, density=density, vertical=bool(choice[j, i]))
+    bumps = bump_array(sl, 60, die_um, pitch=bump_pitch, size=bump_size,
+                       pi_layer=61)
+    crackstop_ring(sl, 62, die_um)
+    sl.write(path)
+    return path, bumps, np.where(choice == 1, np.pi / 2, 0.0)
+

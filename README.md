@@ -171,6 +171,48 @@ part of the schema, a file mixing modes is refused, and pooling can be asserted
 — `--allow-pooling-modes` — with the assertion recorded in the run metadata as
 the operator's judgement rather than a property of the data.
 
+## Routing direction is a layout lever, and needs the bump frame to see
+
+Rabie et al. (2018) recommend running the final metal *diagonally* under the
+corner bumps. No scalar distance can express that: two cells the same distance
+from the same bump, one routed radially and one diagonally, are identical in
+every other feature.
+
+Orientation is measured as a length-weighted axial tensor -- angles doubled
+before averaging, since a line at 179 degrees and one at 1 degree differ by 2,
+not 178 -- giving a dominant direction and a coherence. The direction is then
+resolved against the bump radial direction:
+
+| routing vs radial | `routing_radial_alignment` | `routing_diagonality` |
+|---|---|---|
+| radial | +1 | 0 |
+| **45 degrees** | 0 | **1** |
+| tangential | −1 | 0 |
+
+The recommendation gets a feature of its own rather than being the midpoint of
+one. A window with no dominant direction returns NaN instead of a spurious 45
+degrees, because isotropic and deliberately-diagonal sit at the same place on
+the alignment axis and only coherence separates them.
+
+On a die where every block has identical density and pitch and only the routing
+direction varies:
+
+| feature | ROC-AUC | q |
+|---|---|---|
+| **`routing_diagonality`** | **0.770** | **<0.0001** |
+| `metal_density` | 0.500 | 1.000 |
+| `perimeter_density` | 0.475 | 0.912 |
+| `corner_density` | 0.500 | 1.000 |
+| `orientation_anisotropy` | 0.524 | 0.912 |
+
+Without it the run finds nothing in geometry, and `distance_to_nearest_corner`
+takes the top of the table instead — the layout effect attributed to die
+position.
+
+These are GDS_GEOMETRY features even though they need a bump map to compute.
+Classifying them as package position would put the designer's lever into the
+baseline the lever is supposed to beat.
+
 ## Registration: what the measurement accuracy allows
 
 Spec section 10 assumes failures have already been brought into layout
@@ -495,13 +537,12 @@ literature evidence, not by looking at results.
 Accurate as of the current commit. Verified against the code rather than
 recalled.
 
-**Package geometry is partial.** Bump distance and radial/tangential
-decomposition, PI-opening edge and corner distance, crackstop rail distance
-and pad edge distance exist. Not yet expressed: routing orientation relative to
-the bump radial direction (Rabie's diagonal final-metal lever is directional,
-so a scalar distance cannot test it), pad overlap fraction, PI-opening shape
-descriptors, and seal-ring, slotting, dummy-fill and wide-metal-discontinuity
-as feature families of their own.
+**Package geometry is nearly complete.** Bump distance and radial/tangential
+decomposition, the routing direction resolved against the bump radial
+direction, PI-opening edge and corner distance, crackstop rail distance, pad
+edge distance, and wide metal, slotting and declared dummy fill as their own
+family. Not yet expressed: pad overlap fraction and PI-opening shape
+descriptors.
 
 **One inspection footprint and one layout revision for all dies.** Per-die
 footprints are not expressible, and the run assumes every die shares the GDS

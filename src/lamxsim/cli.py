@@ -205,7 +205,9 @@ def cmd_run(args) -> int:
         with_gradients=manifest.with_gradients,
         pair_selection=manifest.pair_selection,
         line_end_w_max_um=manifest.line_end_w_max_um(),
-        line_rules=manifest.line_rule_map(), seed=args.seed,
+        line_rules=manifest.line_rule_map(),
+        fill_layers=manifest.fill_layers, wide_width_um=manifest.wide_width_um,
+        seed=args.seed,
         allow_pooling_modes=args.allow_pooling_modes,
         allow_failures_outside_footprint=args.allow_failures_outside_footprint)
     res.metadata["manifest"] = manifest.report()

@@ -22,8 +22,66 @@ from ..evidence import EvidenceClass
 from ..layout.reader import LayerSpec, LayoutReader
 from .grid import Grid
 
-FEATURES = ("horizontal_fraction", "vertical_fraction", "orientation_anisotropy")
+FEATURES = ("horizontal_fraction", "vertical_fraction", "orientation_anisotropy",
+            "routing_direction_rad", "orientation_coherence")
 EVIDENCE_CLASS = EvidenceClass.GDS_GEOMETRY
+
+
+def _axial_moments(other: db.Edges, dbu: float) -> tuple[float, float, float]:
+    """Length-weighted (cos 2t, sin 2t, length) for non-axis-aligned edges.
+
+    Only these need a Python loop. Horizontal and vertical edges have known
+    doubled angles, so their moments follow from the lengths KLayout already
+    computes in C++ -- and on Manhattan geometry that is every edge. Walking
+    every edge of every window instead cost 8 ms per cell, thirteen times the
+    whole geometry extractor.
+    """
+    import math
+
+    cos2 = sin2 = total = 0.0
+    for e in other.each():
+        dx, dy = e.dx() * dbu, e.dy() * dbu
+        length = math.hypot(dx, dy)
+        if length <= 0:
+            continue
+        theta2 = 2.0 * math.atan2(dy, dx)
+        cos2 += length * math.cos(theta2)
+        sin2 += length * math.sin(theta2)
+        total += length
+    return cos2, sin2, total
+
+
+def _direction_and_coherence(h_len: float, v_len: float,
+                             other_moments: tuple[float, float, float]
+                             ) -> tuple[float, float]:
+    """Axial orientation from the horizontal, vertical and oblique moments.
+
+    Orientation is axial rather than directional -- a line at theta is the
+    same line as one at theta + 180 -- so angles are doubled before averaging.
+    Averaging raw angles would place the mean of 170 and 10 degrees at 90,
+    perpendicular to both. A horizontal edge has 2t = 0 and a vertical one
+    2t = pi, which is why they enter as +length and -length on the cosine axis
+    and contribute nothing to the sine.
+
+    ``coherence`` is the resultant over the total length: 0 for an isotropic
+    window, 1 where every edge runs the same way. It is what separates a
+    deliberately diagonal routing direction from no direction at all, since
+    both sit at the same place on a radial-versus-tangential axis.
+    """
+    import math
+
+    o_cos, o_sin, o_len = other_moments
+    cos2 = h_len - v_len + o_cos
+    sin2 = o_sin
+    total = h_len + v_len + o_len
+    if total <= 0:
+        return float("nan"), 0.0
+    direction = (0.5 * math.atan2(sin2, cos2)) % math.pi
+    # 0 and pi are the same axis; a rounding error just below zero would
+    # otherwise be reported as 180 degrees for horizontal routing.
+    if direction >= math.pi - 1e-9:
+        direction = 0.0
+    return direction, math.hypot(cos2, sin2) / total
 
 
 def _split(edges: db.Edges) -> tuple[db.Edges, db.Edges, db.Edges]:
@@ -59,6 +117,12 @@ class OrientationExtractor:
         self.reader = reader
         self.u = reader.units
         self._split_cache: dict[tuple[int, int], tuple] = {}
+        self._edge_cache: dict[tuple[int, int], db.Edges] = {}
+
+    def _all_edges(self, spec: LayerSpec) -> db.Edges:
+        if spec.key not in self._edge_cache:
+            self._edge_cache[spec.key] = self.reader.edges(spec)
+        return self._edge_cache[spec.key]
 
     def _edges(self, spec: LayerSpec):
         if spec.key not in self._split_cache:
@@ -69,22 +133,33 @@ class OrientationExtractor:
         u = self.u
         h_len = u.length_dbu_to_um((h & win).length())
         v_len = u.length_dbu_to_um((v & win).length())
-        if not (other & win).is_empty():
-            ox, oy = _projected_lengths(other & win, u.dbu)
+
+        oblique = other & win
+        moments = ((0.0, 0.0, 0.0) if oblique.is_empty()
+                   else _axial_moments(oblique, u.dbu))
+        direction, coherence = _direction_and_coherence(h_len, v_len, moments)
+
+        if not oblique.is_empty():
+            ox, oy = _projected_lengths(oblique, u.dbu)
             h_len += ox
             v_len += oy
         total = h_len + v_len
         if total <= 0:
             return {"horizontal_fraction": 0.0, "vertical_fraction": 0.0,
-                    "orientation_anisotropy": 0.0}
+                    "orientation_anisotropy": 0.0,
+                    "routing_direction_rad": float("nan"),
+                    "orientation_coherence": 0.0}
         return {"horizontal_fraction": h_len / total,
                 "vertical_fraction": v_len / total,
-                "orientation_anisotropy": anisotropy(h_len, v_len)}
+                "orientation_anisotropy": anisotropy(h_len, v_len),
+                "routing_direction_rad": direction,
+                "orientation_coherence": coherence}
 
     def extract(self, spec: LayerSpec, grid: Grid) -> dict[str, np.ndarray]:
         h, v, other = self._edges(spec)
         n = len(grid)
         out = {k: np.zeros(n) for k in FEATURES}
+        out["routing_direction_rad"] = np.full(n, np.nan)
         if h.is_empty() and v.is_empty() and other.is_empty():
             return out
 

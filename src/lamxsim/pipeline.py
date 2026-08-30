@@ -19,12 +19,14 @@ import numpy as np
 import pandas as pd
 
 from .evidence import EvidenceClass
+from .features import bump_relative
 from .features import gradient as grad_mod
 from .features.crosslayer import LayerStack
 from .features import crosslayer
 from .features.geometry import GeometryExtractor
 from .features.grid import build_multiscale
 from .features.orientation import OrientationExtractor
+from .features.structures import StructureExtractor
 from .features.vias import ViaExtractor
 from .labels import inspection, package_context, position
 from .labels.failure import FailureSet, map_to_grid, map_to_grid_per_die
@@ -61,6 +63,11 @@ TIER_PREFIXES = (
     ("horizontal_fraction", "tier1"),
     ("vertical_fraction", "tier1"),
     ("orientation_anisotropy", "tier1"),
+    ("orientation_coherence", "tier1"),
+    ("routing_direction_rad", "exploratory"),
+    ("routing_vs_radial_angle", "tier1"),
+    ("routing_radial_alignment", "tier1"),
+    ("routing_diagonality", "tier1"),
     ("density_difference", "tier1"),
     ("perimeter_density_difference", "tier1"),
     ("orientation_difference", "tier1"),
@@ -69,6 +76,12 @@ TIER_PREFIXES = (
     ("perimeter_density_mismatch", "tier1"),
     ("orientation_mismatch", "tier1"),
     ("line_end_density_mismatch", "tier1"),
+    ("wide_metal_fraction", "tier1"),
+    ("wide_metal_perimeter_density", "tier1"),
+    ("slot_density", "tier1"),
+    ("slotted_metal_fraction", "tier1"),
+    ("fill_density", "exploratory"),
+    ("fill_fraction", "exploratory"),
     ("cross_layer_transition_index", "tier1"),
     ("top_to_underlying", "tier1"),
     ("stacked_dense_layer_count", "exploratory"),
@@ -109,10 +122,11 @@ GRADIENT_OF = ("metal_density", "perimeter_density", "line_end_density",
                "corner_density", "orientation_anisotropy", "via_density")
 
 
-def _extract_layer(reader, geo_ex, ori_ex, via_ex, layer, via_layer, grid, *,
-                   with_gradients=True):
+def _extract_layer(reader, geo_ex, ori_ex, via_ex, struct_ex, layer, via_layer,
+                   grid, *, with_gradients=True):
     vals = dict(geo_ex.extract(layer, grid))
     vals.update(ori_ex.extract(layer, grid))
+    vals.update(struct_ex.extract(layer, grid))
     if via_layer is not None:
         vals.update(via_ex.extract(via_layer, grid))
     base = dict(vals)
@@ -137,6 +151,8 @@ def run(gds_path: str, failures: FailureSet, *,
         top_cell: str | None = None,
         line_end_w_max_um: float | None = None,
         line_rules: "dict[str, tuple[float, float]] | None" = None,
+        fill_layers: "dict[str, LayerSpec] | None" = None,
+        wide_width_um: float = 3.0,
         seed: int = 0) -> RunResult:
     t0 = time.time()
     specs = layers if layers is not None else [layer]
@@ -148,6 +164,8 @@ def run(gds_path: str, failures: FailureSet, *,
                                line_rules=line_rules)
     ori_ex = OrientationExtractor(reader)
     via_ex = ViaExtractor(reader)
+    struct_ex = StructureExtractor(reader, wide_width_um=wide_width_um,
+                                   fill_layers=fill_layers)
     # Vias are keyed by the metal layer they sit under, so via features carry
     # that metal layer's identity into the association table rather than
     # appearing as an unattached layer of their own.
@@ -280,7 +298,8 @@ def run(gds_path: str, failures: FailureSet, *,
         per_layer_base = {}
 
         for spec in specs:
-            vals, base = _extract_layer(reader, geo_ex, ori_ex, via_ex, spec,
+            vals, base = _extract_layer(reader, geo_ex, ori_ex, via_ex,
+                                        struct_ex, spec,
                                         via_layers.get(spec.name), grid,
                                         with_gradients=with_gradients)
             per_layer_base[spec.name] = base
@@ -299,6 +318,22 @@ def run(gds_path: str, failures: FailureSet, *,
                 ctx = package_context.extract(grid, bbox, reader, package_layers)
                 for name, v in ctx.items():
                     columns.append((name, "-", v, EvidenceClass.PACKAGE_POSITION))
+
+                # Routing resolved against the package loading direction is a
+                # layout property -- the thing a designer changes -- even
+                # though it takes a bump map to compute. It is scored as
+                # geometry, against a baseline that already holds the bump
+                # distances it would otherwise be confounded with.
+                radial = ctx.get("bump_radial_direction_rad")
+                if radial is not None and np.isfinite(radial).any():
+                    for spec in specs:
+                        base = per_layer_base[spec.name]
+                        rel = bump_relative.extract(
+                            base["routing_direction_rad"],
+                            base["orientation_coherence"], radial)
+                        for name, v in rel.items():
+                            columns.append((name, spec.name, v,
+                                            EvidenceClass.GDS_GEOMETRY))
 
         def observation_groups(cell_values):
             """Permutation groups: the spatial block, within one die.
@@ -408,6 +443,8 @@ def run(gds_path: str, failures: FailureSet, *,
         "pair_selection": pair_selection if len(specs) > 1 else None,
         "with_gradients": with_gradients,
         "line_rules": line_rules or {},
+        "fill_layers": {k: str(v) for k, v in (fill_layers or {}).items()},
+        "wide_width_um": wide_width_um,
         "die_bbox_um": [die_bbox.xmin, die_bbox.ymin, die_bbox.xmax, die_bbox.ymax],
         "geometry_bbox_um": [geometry_bbox.xmin, geometry_bbox.ymin,
                              geometry_bbox.xmax, geometry_bbox.ymax],

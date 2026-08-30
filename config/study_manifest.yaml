@@ -24,6 +24,15 @@ layout:
   via_layers:
     M8: {name: V7, layer: 17, datatype: 0}
 
+  # Dummy fill, per metal layer. Fill is declared rather than inferred:
+  # separating it from routing by shape alone is guesswork, and getting it
+  # wrong makes a fill edge look like a minimum-width routing line.
+  fill_layers: {}
+
+  # A shape at least this wide counts as wide metal rather than routing.
+  # Rabie et al. (2018) list wide-metal slotting among the layout levers.
+  wide_width_um: 3.0
+
   # Package context. Absent layers are recorded as uncontrolled confounding
   # rather than silently ignored -- every layout lever in Rabie et al. (2018)
   # is defined relative to bumps.

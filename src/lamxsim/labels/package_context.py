@@ -35,6 +35,7 @@ FEATURES = (
     "distance_to_nearest_bump",
     "bump_radial_offset",
     "bump_tangential_offset",
+    "bump_radial_direction_rad",
     "local_bump_pitch",
     "bump_count_density",
     "under_bump_indicator",
@@ -164,6 +165,9 @@ def extract(grid, die_bbox: BBox, reader: LayoutReader,
         uy = np.where(safe, ry / np.where(safe, norm, 1.0), 0.0)
         out["bump_radial_offset"] = dx * ux + dy * uy
         out["bump_tangential_offset"] = -dx * uy + dy * ux
+        # The direction package-induced shear grows along at this location,
+        # kept as an angle so layout orientation can be resolved against it.
+        out["bump_radial_direction_rad"] = np.arctan2(uy, ux) % np.pi
 
         # Local pitch from the nearest-neighbour spacing of the bump this cell
         # belongs to, so a die with a non-uniform bump map is described
@@ -180,8 +184,9 @@ def extract(grid, die_bbox: BBox, reader: LayoutReader,
             x, y, reader, layers.bump).astype(float)
     else:
         for k in ("distance_to_nearest_bump", "bump_radial_offset",
-                  "bump_tangential_offset", "local_bump_pitch",
-                  "bump_count_density", "under_bump_indicator"):
+                  "bump_tangential_offset", "bump_radial_direction_rad",
+                  "local_bump_pitch", "bump_count_density",
+                  "under_bump_indicator"):
             out[k] = np.full(n, np.nan)
 
     # Measured to the boundary of the shape. Li et al. (2023, 2025) locate the
