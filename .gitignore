@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 results/
+
+# IEEE-copyrighted PDF: fine to keep locally, not redistributable in a public
+# repo. Obtain it from the IEEE SSCS chapter page listed in references/README.md.
+references/pdf/OA_Gambino_Cu-interconnect-32nm-node-and-beyond.pdf

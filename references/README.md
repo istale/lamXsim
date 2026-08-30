@@ -19,11 +19,19 @@ opens fine in a normal browser.
 
 ### Downloaded (open access, in `pdf/`)
 
+The two MDPI articles are **CC BY 4.0** and are redistributed here under that
+licence, with attribution as given below. The Gambino paper is **IEEE
+copyrighted** (`978-1-4244-4072-6/09/$25.00 2009 IEEE`) and carries no
+redistribution licence, so it is deliberately **not tracked in this
+repository** — download it directly from the IEEE SSCS Denver chapter
+reference page:
+<https://ewh.ieee.org/r5/denver/sscs/References/2009_09_Gambino.pdf>
+
 | File | Pages | Why it is here |
 |---|---|---|
 | `OA_BEoL-failure-locations-20nm-CPI-semielliptical-cracks.pdf` | 14 | Where in the BEoL stack and where on the die CPI cracks initiate — this is the **PACKAGE_POSITION prior** the engine must control for |
 | `OA_Micromachines2025_BEOL-design-factors-thermal-reliability-FCCSP.pdf` | 14 | Freely readable modern stand-in for Vanstreels 2020 on BEOL design factors vs thermo-mechanical reliability |
-| `OA_Gambino_Cu-interconnect-32nm-node-and-beyond.pdf` | 8 | ULK integration / CMP delamination / CPI background at the node Yoo 2004 targets |
+| *(not in this repository)* `OA_Gambino_Cu-interconnect-32nm-node-and-beyond.pdf` | 8 | ULK integration / CMP delamination / CPI background at the node Yoo 2004 targets |
 
 ## DOI correction
 
