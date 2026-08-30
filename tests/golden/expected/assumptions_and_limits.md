@@ -77,8 +77,12 @@ Every one of the 137 candidate records is a **mechanistic engineering hypothesis
 
 There is deliberately no combined hotspot layer.
 
+## Where the feature maps came from
+
+All feature maps were extracted with KLayout from the GDS directly. `lamxsim characterize --features-from DIR` reads the density and count maps from a Calibre deck run instead; on the regression die the two paths produce the same candidate set.
+
 ## What would turn this into evidence
 
-Measured failure locations in the same coordinate frame, with lot/wafer/die identity, a registration fiducial set, an inspected footprint, and the failed layer or interface. `unsupported_physics.csv` lists the package and material quantities that no GDS contains and that a study must hold fixed, stratify, or measure.
+Measured failure locations in the same coordinate frame, with lot/wafer/die identity, a registration fiducial set, an inspected footprint, and the failed layer or interface. `unsupported_non_gds_physics.csv` lists the package and material quantities that no GDS contains and that a study must hold fixed, stratify, or measure; `unimplemented_gds_observables.csv` lists the ones that are in the layout and simply are not extracted yet, which is a different kind of gap and a much cheaper one to close.
 
 Run `lamxsim phase0` for how many failure sites the association analysis would need before it could say anything at all.

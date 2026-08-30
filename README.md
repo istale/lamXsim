@@ -64,7 +64,8 @@ Seven channels, one per mechanism, each with its citation:
 
 Outputs: `feature_maps.parquet`, `literature_candidates.csv`,
 `candidate_regions.gds`, `literature_traceability.csv`,
-`unsupported_physics.csv`, `assumptions_and_limits.md`.
+`unsupported_non_gds_physics.csv`, `unimplemented_gds_observables.csv`,
+`assumptions_and_limits.md`.
 
 **Three rules keep this from becoming a risk score.** Spec section 1 forbids
 an arbitrary weighted delamination probability, and a weighted sum of these
@@ -84,7 +85,48 @@ data this study does not have.
 The atlas is a **deterministic geometry fact** for every map and a
 **mechanistic engineering hypothesis** for every candidate — a reason to look
 somewhere first. It is not a statistical association, which needs measured
-failures, and `unsupported_physics.csv` lists per channel what no GDS contains.
+failures. `unsupported_non_gds_physics.csv` lists per channel what no GDS
+contains; `unimplemented_gds_observables.csv` lists what the layout does contain
+and this code does not extract yet -- a much cheaper gap to close.
+
+### Full-chip: extract with Calibre instead of KLayout
+
+The KLayout extractor is per-window Python. It is fine on a validation die and
+it is the wrong tool for a full production layout, where the density and count
+maps are what a DRC engine does natively. Generate the deck, run it, and point
+`characterize` at the output:
+
+```bash
+PYTHONPATH=src python3 -m lamxsim deck --manifest layers.yaml --outdir deck
+# run deck/rules.svrf in Calibre, then
+PYTHONPATH=src python3 -m lamxsim characterize chip.gds \
+  --manifest layers.yaml --features-from deck
+```
+
+The deck supplies `metal_density`, `perimeter_density` (inside band plus the
+exact corner correction), the corner counts, `via_density`, `via_count_density`
+and a narrow-structure map. Orientation, gradients, cross-layer terms, position
+and package context are computed in Python either way, and every report says
+which maps came from where.
+
+On the regression die the two paths produce the **same candidate set**, and the
+cross-check that establishes that is `tests/test_calibre_crosscheck.py`. It runs
+against `lamxsim.calibre.emulate`, a KLayout statement of what each generated
+rule means — enough to test the ingest path, the conversions and the grid
+alignment, not enough to test Calibre. `--emulate` on the `deck` command
+produces that output without a licence, and anything derived from it is labelled
+as emulated. Run the deck against the real tool once and diff it before
+reporting a production number.
+
+Two things the deck deliberately does not do. It does not produce the line-end
+count: no SVRF primitive defines a line end on merged geometry, the
+morphological opening that looks like one measures minimum width instead (on a
+benchmark with nine line ends it returns one connected piece, and on dummy fill
+with none it returns thirty-six), and recovering the real count needs pattern
+matching. And counts come from marker lists rather than from marker densities,
+because turning an area fraction back into a count needs every marker to have a
+known uniform area — an assumption the deck cannot check and whose failure
+scales every count by a constant nothing downstream would notice.
 
 ## Quick start
 

@@ -138,6 +138,40 @@ class GeometryExtractor:
         d = self.u.um_to_dbu
         return db.Region(db.Box(d(cell.x0), d(cell.y0), d(cell.x1), d(cell.y1)))
 
+    def _win_edges_region(self, cell, grid=None) -> db.Region:
+        """The window as a half-open box, for clipping *edges*.
+
+        A closed box counts an edge lying exactly on the shared border of two
+        tiles in both of them. Area does not care -- a border strip has no
+        area -- but perimeter does, and layouts put edges on round
+        coordinates, which is exactly where an analysis grid puts its borders.
+        Measured on the golden die at a 100um non-overlapping grid, the tiled
+        windows summed to 4.7 % (M8) and 7.0 % (M7) more perimeter than the
+        layer actually has, all of it edge lying on a grid line. The inflation
+        depends on where the grid falls, so it is an artefact of the analysis
+        rather than a property of the layout.
+
+        Excluding the top and right borders makes the tiles partition the
+        plane, matching the half-open rule the point-count features (corners,
+        line ends, vias) already use. The cost is one database unit of length
+        at each end of a crossing edge -- 0.002um against a window perimeter
+        measured in thousands, against the 5-7 % it removes.
+
+        The grid's own outermost border is closed, for the same reason a
+        histogram closes its last bin: there is no neighbouring window to
+        receive the edge, so leaving it open drops the outer boundary of the
+        layout -- on a die whose geometry runs to the bbox, that is the whole
+        seal ring.
+        """
+        d = self.u.um_to_dbu
+        x1, y1 = d(cell.x1) - 1, d(cell.y1) - 1
+        if grid is not None:
+            if cell.x1 >= grid.bbox.xmax:
+                x1 = d(cell.x1)
+            if cell.y1 >= grid.bbox.ymax:
+                y1 = d(cell.y1)
+        return db.Region(db.Box(d(cell.x0), d(cell.y0), x1, y1))
+
     def extract(self, spec: LayerSpec, grid: Grid) -> dict[str, np.ndarray]:
         """Return {feature_name: array over grid cells} for one layer/grid.
 
@@ -187,7 +221,9 @@ class GeometryExtractor:
                 # Clip the *edges*, not the Region: clipping the Region and
                 # taking its perimeter counts the window cut as metal boundary
                 # (a 30x10um bar cut at x=15um reports 50um, not the true 40um).
-                perim[i] = u.length_dbu_to_um((s_edges & win).length()) / cell.area_um2
+                perim[i] = (u.length_dbu_to_um(
+                    (s_edges & self._win_edges_region(cell, grid)).length())
+                    / cell.area_um2)
 
         out = {"metal_density": metal, "perimeter_density": perim,
                "line_end_density": self._point_density(

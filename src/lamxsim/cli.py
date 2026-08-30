@@ -157,7 +157,8 @@ def cmd_characterize(args) -> int:
     manifest = StudyManifest.load(args.manifest)
     manifest.sample_conditions.validate()
     result = atlas_mod.build(args.gds, manifest,
-                             candidate_percentile=args.candidate_percentile)
+                             candidate_percentile=args.candidate_percentile,
+                             calibre_dir=args.features_from)
     meta = result.metadata
 
     print(f"layout   : {args.gds}")
@@ -167,6 +168,15 @@ def cmd_characterize(args) -> int:
           f"   ({'declared' if meta['die_outline_declared'] else 'ASSUMED from geometry'})")
     print(f"  scales   : {meta['scales_um']} um")
     print(f"  features : {sum(1 for c in result.features.columns if '|' in c)} maps")
+    cal = meta.get("calibre")
+    if cal:
+        taken = sorted({f for byscale in cal["features_taken"].values()
+                        for fs in byscale.values() for f in fs})
+        print(f"  extraction: {cal['generator']}"
+              f"{'  (EMULATED, not run through Calibre)' if cal['emulated'] else ''}")
+        print(f"    from deck  : {', '.join(taken) if taken else 'nothing matched'}")
+        print(f"    from Python: orientation, gradients, cross-layer, position, "
+              f"package context -- the deck does not produce these")
 
     if manifest.gaps:
         print("\ndeclared gaps in the manifest:")
@@ -203,6 +213,45 @@ def cmd_characterize(args) -> int:
     print("\nRead assumptions_and_limits.md first. Nothing here is a "
           "probability: with no measured failure there is no scale on which "
           "one could be defined.")
+    return 0
+
+
+def cmd_deck(args) -> int:
+    """Generate the Calibre rule deck for a study manifest."""
+    from .calibre import svrf
+
+    manifest = StudyManifest.load(args.manifest)
+    layers = svrf.layers_from_manifest(manifest)
+    paths = svrf.write_deck(args.outdir, layers, scales_um=manifest.scales_um,
+                            step_ratio=args.step_ratio)
+
+    print(f"layers : {', '.join(str(l.name) for l in layers)}")
+    print(f"scales : {list(manifest.scales_um)} um   STEP = WINDOW x "
+          f"{args.step_ratio:g}")
+    for row in svrf.eps_report(layers):
+        print(f"  {row['layer']:6s} min width {row['min_width_um']:g}um -> "
+              f"eps {row['eps_um']:g}um  ({row['margin_x']:g}x margin before "
+              f"the band collapses at {row['cliff_at_um']:g}um)")
+    print("\nwritten:")
+    for k, v in paths.items():
+        print(f"  {k:22s} {v}")
+
+    if args.emulate:
+        from .calibre import emulate
+
+        run = emulate.run(args.emulate, layers, scales_um=manifest.scales_um,
+                          step_ratio=args.step_ratio, outdir=args.outdir)
+        print(f"\nemulated {len(run.density)} density scan(s) and "
+              f"{len(run.markers)} marker file(s) into {args.outdir}")
+        print("These are KLayout results shaped like deck output, for testing "
+              "the ingest path. They are NOT Calibre results; anything derived "
+              "from them says so.")
+
+    print("\nRun the deck, then: lamxsim characterize <gds> --manifest "
+          f"{args.manifest} --features-from {args.outdir}")
+    print("The eps guard checks must come back empty. A non-empty one means "
+          "the layout is narrower than the manifest says and every perimeter "
+          "number is understated.")
     return 0
 
 
@@ -593,10 +642,31 @@ def main(argv=None) -> int:
     ch.add_argument("gds")
     ch.add_argument("--manifest", default="config/study_manifest.yaml")
     ch.add_argument("--outdir", default="results/atlas")
+    ch.add_argument("--features-from", metavar="DIR",
+                    help="read the density/marker features from a Calibre deck "
+                         "output directory instead of extracting them with "
+                         "KLayout. The directory must hold the "
+                         "extraction_manifest.json written beside the deck; "
+                         "everything the deck does not produce is still "
+                         "computed in Python and the split is reported.")
     ch.add_argument("--candidate-percentile", type=float, default=95.0,
                     help="a cell is a candidate on a channel at or above this "
                          "percentile of the die (default 95, i.e. the top 5%%)")
     ch.set_defaults(func=cmd_characterize)
+
+    dk = sub.add_parser("deck", help="generate the Calibre rule deck")
+    dk.add_argument("--manifest", default="config/study_manifest.yaml")
+    dk.add_argument("--outdir", default="calibre_deck")
+    dk.add_argument("--step-ratio", type=float, default=1.0,
+                    help="STEP as a fraction of WINDOW (default 1.0, "
+                         "non-overlapping). The atlas grids do not overlap, so "
+                         "a deck stepped differently is refused rather than "
+                         "re-binned onto cells it was not measured on.")
+    dk.add_argument("--emulate", metavar="GDS",
+                    help="also produce emulated output for this layout, so the "
+                         "ingest path can be exercised without a Calibre "
+                         "licence. The result is labelled as emulated.")
+    dk.set_defaults(func=cmd_deck)
 
     p6 = sub.add_parser("phase6", help="baseline, spatial CV and ablation")
     p6.add_argument("--outdir", default="results")

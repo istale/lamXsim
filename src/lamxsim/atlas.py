@@ -51,7 +51,28 @@ class Atlas:
     metadata: dict = field(default_factory=dict)
 
 
-def _extract_scale(reader, manifest, grid, bbox):
+def _apply_calibre(vals, source, layer, grid, bbox, provenance):
+    """Replace the maps the deck supplied, and record which those were.
+
+    Only the features in ``CALIBRE_SUPPLIED`` are taken. Everything else the
+    load produces -- the uncorrected band in particular -- stays out of the
+    atlas: it exists to be compared against the corrected value, not to be
+    scored as a feature under a name a reader would take for perimeter.
+    """
+    from .calibre.ingest import CALIBRE_SUPPLIED
+
+    supplied = source.features_for(layer, grid.scale_um, bbox, grid=grid)
+    taken = []
+    for name, values in supplied.items():
+        if name not in CALIBRE_SUPPLIED or name not in vals:
+            continue
+        vals[name] = values
+        taken.append(name)
+    provenance.setdefault(layer, {})[float(grid.scale_um)] = sorted(taken)
+    return vals
+
+
+def _extract_scale(reader, manifest, grid, bbox, calibre=None, provenance=None):
     """Every feature map available at one scale, with no failure data."""
     geo = GeometryExtractor(reader, line_rules=manifest.line_rule_map())
     ori = OrientationExtractor(reader)
@@ -67,6 +88,11 @@ def _extract_scale(reader, manifest, grid, bbox):
         via_spec = manifest.via_layers.get(spec.name)
         if via_spec is not None:
             vals.update(via.extract(via_spec, grid))
+        if calibre is not None:
+            _apply_calibre(vals, calibre, spec.name, grid, bbox, provenance)
+            if via_spec is not None and via_spec.name in calibre.layers():
+                _apply_calibre(vals, calibre, via_spec.name, grid, bbox,
+                               provenance)
         per_layer[spec.name] = vals
         vals = dict(vals)
         vals.update(grad_mod.gradient_set(
@@ -110,7 +136,7 @@ def _channel_inputs(flat: dict, layer: str) -> dict[str, np.ndarray]:
 
 
 def build(gds_path: str, manifest, *, candidate_percentile: float =
-          CANDIDATE_PERCENTILE) -> Atlas:
+          CANDIDATE_PERCENTILE, calibre_dir: str | None = None) -> Atlas:
     reader = LayoutReader(gds_path, top_cell=manifest.top_cell)
     manifest.validate_against(reader)
     geometry_bbox = reader.bbox()
@@ -129,11 +155,27 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
     roi_without_outline = (not manifest.die_outline_um
                            and _is_roi(die_bbox, geometry_bbox))
 
+    calibre, calibre_provenance = None, {}
+    if calibre_dir:
+        from .calibre import ingest as calibre_ingest
+
+        calibre = calibre_ingest.discover(calibre_dir)
+        missing = sorted(set(manifest.scales_um) - set(calibre.scales_um()))
+        if missing:
+            raise ValueError(
+                f"the deck output in {calibre_dir} covers scales "
+                f"{calibre.scales_um()}um, and the manifest asks for "
+                f"{sorted(manifest.scales_um)}um; {missing}um would silently "
+                "fall back to the KLayout extractor, so half the atlas would "
+                "come from each path with nothing saying which. Regenerate "
+                "the deck for the manifest's scales, or narrow the manifest.")
+
     grids = build_multiscale(geometry_bbox, manifest.scales_um)
     frames, channels, candidate_rows = [], {}, []
 
     for scale, grid in sorted(grids.items()):
-        flat, _ = _extract_scale(reader, manifest, grid, die_bbox)
+        flat, _ = _extract_scale(reader, manifest, grid, die_bbox,
+                                 calibre, calibre_provenance)
         frame = pd.DataFrame(grid.to_arrays())
         frame = pd.concat([frame, pd.DataFrame(flat, index=frame.index)], axis=1)
         frames.append(frame)
@@ -199,6 +241,17 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
         "die_relative_channels_disabled": bool(roi_without_outline),
         "scales_um": sorted(grids),
         "candidate_percentile": candidate_percentile,
+        "feature_source": ("calibre" if calibre else "klayout"),
+        "calibre": ({
+            "directory": str(calibre_dir),
+            "emulated": calibre.emulated,
+            "generator": calibre.manifest.get("generator", ""),
+            "eps_um": {l: calibre.eps_um(l) for l in calibre.layers()},
+            "features_taken": {l: v for l, v in calibre_provenance.items()},
+            "note": ("features not listed here were computed in Python from "
+                     "the GDS: orientation, gradients, cross-layer terms, "
+                     "position and package context are not in the deck."),
+        } if calibre else None),
         "manifest": manifest.report(),
         "evidence_level": (
             "1 for the feature maps (deterministic geometry, checkable against "
@@ -384,14 +437,53 @@ def _limits_document(atlas: Atlas, manifest, overlay: dict) -> str:
         lines.append("There is deliberately no combined hotspot layer.")
         lines.append("")
 
+    cal = atlas.metadata.get("calibre")
+    lines += ["## Where the feature maps came from", ""]
+    if cal:
+        taken = sorted({f for by_scale in cal["features_taken"].values()
+                        for fs in by_scale.values() for f in fs})
+        lines += [
+            f"Density and count maps were read from a rule-deck run in "
+            f"`{cal['directory']}` (`{cal['generator']}`): "
+            f"{', '.join(taken) if taken else 'nothing matched'}.",
+            "",
+            "Everything else -- orientation, gradients, cross-layer terms, "
+            "position and package context -- was computed in Python from the "
+            "GDS, because the deck does not produce it.",
+            "",
+            "Per-layer eps used for the perimeter band: "
+            + ", ".join(f"{k} {v:g}um" for k, v in sorted(cal["eps_um"].items())
+                        if v) + ".",
+            "",
+        ]
+        if cal["emulated"]:
+            lines += [
+                "**These maps were emulated, not produced by Calibre.** They "
+                "come from a KLayout statement of what each rule means, which "
+                "checks the ingest path and the grid alignment but cannot "
+                "check the tool. Do not report these as a Calibre result.",
+                "",
+            ]
+    else:
+        lines += [
+            "All feature maps were extracted with KLayout from the GDS "
+            "directly. `lamxsim characterize --features-from DIR` reads the "
+            "density and count maps from a Calibre deck run instead; on the "
+            "regression die the two paths produce the same candidate set.",
+            "",
+        ]
+
     lines += [
         "## What would turn this into evidence",
         "",
         "Measured failure locations in the same coordinate frame, with "
         "lot/wafer/die identity, a registration fiducial set, an inspected "
-        "footprint, and the failed layer or interface. `unsupported_physics.csv` "
-        "lists the package and material quantities that no GDS contains and "
-        "that a study must hold fixed, stratify, or measure.",
+        "footprint, and the failed layer or interface. "
+        "`unsupported_non_gds_physics.csv` lists the package and material "
+        "quantities that no GDS contains and that a study must hold fixed, "
+        "stratify, or measure; `unimplemented_gds_observables.csv` lists the "
+        "ones that are in the layout and simply are not extracted yet, which "
+        "is a different kind of gap and a much cheaper one to close.",
         "",
         "Run `lamxsim phase0` for how many failure sites the association "
         "analysis would need before it could say anything at all.",

@@ -1,4 +1,101 @@
 {
+  "calibre": null,
+  "candidate_percentile": 95.0,
+  "die_bbox_um": [
+    0.0,
+    0.0,
+    1500.0,
+    1500.0
+  ],
+  "die_outline_declared": true,
+  "die_relative_channels_disabled": false,
+  "evidence_level": "1 for the feature maps (deterministic geometry, checkable against KLayout or Calibre); 3 for the candidates (a mechanistic engineering hypothesis with a citation). Not level 2: no measured failure was involved, so nothing here is a statistical association, a probability, or a design rule.",
+  "feature_source": "klayout",
+  "gds_path": "tests/golden/golden_die.gds",
+  "geometry_bbox_um": [
+    0.0,
+    0.0,
+    1500.0,
+    1500.0
+  ],
+  "manifest": {
+    "declared_gaps": [
+      "no fill_layers: dummy fill cannot be separated from functional geometry, so it contributes to every density and sets the shortest edge on the layer",
+      "no layout_revision: nothing checks that every die analysed was built from the layout in this file",
+      "11 package/process condition(s) undeclared (emc_thickness_um, underfill_cte_ppm_k, underfill_modulus_gpa, underfill_tg_c...): none can be read from GDS, and if any varies across the study an apparent geometry effect may be standing in for it",
+      "no registration fiducials: positional uncertainty must come from the failure file, and no scale can be certified from measured registration"
+    ],
+    "die_outline_um": [
+      0,
+      0,
+      1500,
+      1500
+    ],
+    "enforce_scale_gate": true,
+    "fill_layers": {},
+    "footprint_per_die": [],
+    "layout_revision": null,
+    "line_rules": {
+      "M7": {
+        "line_max_width_um": 1.0,
+        "min_width_um": 0.1
+      },
+      "M8": {
+        "line_max_width_um": 2.0,
+        "min_width_um": 0.2
+      }
+    },
+    "metal_layers": [
+      "M8(8/0)",
+      "M7(7/0)"
+    ],
+    "min_coverage": 0.5,
+    "package_layers": {
+      "bump": "BUMP(60/0)",
+      "crackstop": "CS(62/0)",
+      "pad": null,
+      "pi_opening": "PI(61/0)"
+    },
+    "pair_selection": "adjacent_and_top",
+    "sample_conditions": {
+      "by_condition": {
+        "bump_material": "unknown",
+        "dielectric_stack": "unknown",
+        "emc_thickness_um": "unknown",
+        "inspection_method": "unknown",
+        "inspection_sensitivity_um": "unknown",
+        "package_type": "unknown",
+        "reflow_profile": "unknown",
+        "thermal_cycle_condition": "unknown",
+        "underfill_cte_ppm_k": "unknown",
+        "underfill_modulus_gpa": "unknown",
+        "underfill_tg_c": "unknown"
+      },
+      "fixed_values": {},
+      "undeclared": [
+        "emc_thickness_um",
+        "underfill_cte_ppm_k",
+        "underfill_modulus_gpa",
+        "underfill_tg_c",
+        "reflow_profile",
+        "thermal_cycle_condition",
+        "dielectric_stack",
+        "bump_material",
+        "package_type",
+        "inspection_method",
+        "inspection_sensitivity_um"
+      ]
+    },
+    "scales_um": [
+      100,
+      250
+    ],
+    "source": "tests/golden/golden_manifest.yaml",
+    "via_layers": {
+      "M8": "V7(17/0)"
+    },
+    "wide_width_um": 3.0
+  },
   "overlay_layers": {
     "cross_layer_mismatch": 200,
     "layout_transition": 201,
@@ -12,17 +109,5 @@
     100.0,
     250.0
   ],
-  "candidate_percentile": 95.0,
-  "die_bbox_um": [
-    0.0,
-    0.0,
-    1500.0,
-    1500.0
-  ],
-  "geometry_bbox_um": [
-    0.0,
-    0.0,
-    1500.0,
-    1500.0
-  ]
+  "top_cell": "TOP"
 }
