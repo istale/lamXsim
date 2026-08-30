@@ -68,7 +68,14 @@ nothing.** It correlates r ≈ 0.44 with the real driver. Univariate rankings
 alone cannot separate a cause from its correlate, which is why feature
 clustering belongs in the reporting layer before any ranking is published.
 
-**3. The spatial null model is not optional.** On a die with *no* package-position
+**3. Failures are assigned to a cell by its bounds, not by a radius.** Cells
+are squares; testing a radius against the cell centre inscribes a circle in
+each one and silently discards everything in the corners — 21 % of the die
+(1 − π/4), arranged on a regular lattice rather than scattered. An explicit
+`radius_um` still selects the circular test, for deliberately crediting a
+failure to every cell near it.
+
+**4. The spatial null model is not optional.** On a die with *no* package-position
 effect at all:
 
 | | naive Mann-Whitney | block permutation |
@@ -81,16 +88,16 @@ permutation removed all of them while keeping the real geometry signal. Without
 spec section 15, this engine would confidently report that distance-to-die-edge
 predicts delamination on a die where it does not.
 
-**4. Effective sample size is far below cell count.** At 25 µm the grid has
+**5. Effective sample size is far below cell count.** At 25 µm the grid has
 6,320 cells but ~489 independent observations; at 250 µm, 56 cells and ~29.
 Both numbers are reported on every row.
 
-**5. "Best scale" needs a confidence interval.** Perimeter density peaks at
+**6. "Best scale" needs a confidence interval.** Perimeter density peaks at
 250 µm (AUC 0.883) but its CI is [0.79, 0.96], overlapping the 100 µm CI of
 [0.70, 0.81]. The point estimates alone would name a best scale that the data
 does not support.
 
-**6. Perimeter cannot stand in for line terminations.** Chopping lines into
+**7. Perimeter cannot stand in for line terminations.** Chopping lines into
 segments removes long-edge length as fast as it adds end-cap length, so
 perimeter density moves only ~3 % while the termination count rises tenfold.
 `line_end_density` is therefore its own feature, and with it the section 26
@@ -180,17 +187,22 @@ density is spatially decoupled from it:
 
 | model | AUC | ΔAUC vs position | 95 % CI | adds information |
 |---|---|---|---|---|
-| position only | 0.509 | — | — | — |
-| A metal density | 0.504 | −0.005 | [−0.085, +0.075] | no |
-| B + via | 0.504 | −0.005 | [−0.085, +0.075] | no |
-| **C + perimeter** | **0.737** | **+0.229** | **[+0.171, +0.286]** | **yes** |
-| D + terminations, corners | 0.729 | +0.221 | [+0.159, +0.278] | yes |
-| E–G + orientation, gradients, cross-layer | 0.728 | +0.219 | [+0.159, +0.275] | yes |
+| position only | 0.493 | — | — | — |
+| A metal density | 0.569 | +0.076 | [+0.011, +0.136] | yes |
+| B + via | 0.569 | +0.076 | [+0.011, +0.136] | yes |
+| **C + perimeter** | **0.773** | **+0.280** | **[+0.231, +0.318]** | **yes** |
+| D + terminations, corners | 0.768 | +0.275 | [+0.225, +0.315] | yes |
+| E–G + orientation, gradients, cross-layer | 0.764 | +0.271 | [+0.218, +0.312] | yes |
 
-That is the section 18 question answered: all of the information enters at the
-perimeter step, and nothing before it. The interval is a paired block bootstrap
-over the same out-of-fold predictions — a per-observation bootstrap would return
-one several times too narrow.
+That is the section 18 question answered, and it is answered by the size of
+each step rather than by which steps reach significance. Metal density is not
+the driver but correlates with it (r ~ 0.44 on this die), so it carries a
+small real effect; the perimeter step is roughly four times larger, and nothing
+added after it improves on it. An ablation read only by significance would have
+called metal density a finding.
+
+The interval is a paired block bootstrap over the same out-of-fold predictions
+— a per-observation bootstrap would return one several times too narrow.
 
 Run with `--null` and every family reports `adds_information = False`, with all
 seven intervals spanning zero.

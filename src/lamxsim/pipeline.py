@@ -170,6 +170,14 @@ def run(gds_path: str, failures: FailureSet, *,
 
         feat_frames.append(frame)
 
+    if not assoc_rows:
+        raise ValueError(
+            "no feature x layer x scale combination could be scored. Every "
+            "candidate had too few finite values or no failures in the grid; "
+            "check that the failure coordinates lie inside the die bounding "
+            f"box {[bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax]} and are in "
+            "layout coordinates (registration/apply.register does this).")
+
     fdr.apply_tiered([a for a, _ in assoc_rows])
     rows = []
     for a, row in assoc_rows:
@@ -213,8 +221,9 @@ def write_results(result: RunResult, outdir: str | Path) -> dict[str, str]:
     paths["associations"] = str(p)
 
     best = result.associations.copy()
-    best["abs_effect"] = best["effect_size"].abs()
-    best = best.sort_values("abs_effect", ascending=False)
+    if "effect_size" in best.columns:
+        best["abs_effect"] = best["effect_size"].abs()
+        best = best.sort_values("abs_effect", ascending=False)
     p = out / "features" / "best_features.csv"
     best.to_csv(p, index=False)
     paths["best_features"] = str(p)

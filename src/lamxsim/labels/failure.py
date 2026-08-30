@@ -86,9 +86,22 @@ def map_to_grid(failures: FailureSet, grid, *, radius_um: float | None = None
                 ) -> dict[str, np.ndarray]:
     """Derive per-cell failure labels (spec section 10).
 
-    ``radius_um`` defaults to half the grid scale, i.e. a failure marks the
-    cell it falls in. Returns failure_present, failure_count and
-    distance_to_nearest_failure for every cell.
+    By default a failure belongs to the cell whose *bounds* contain it. Cells
+    are squares, so testing a radius against the cell centre instead inscribes
+    a circle in each one and silently discards everything in the corners --
+    21% of the die (1 - pi/4), arranged on a regular lattice rather than
+    scattered, which biases the labels wherever the layout has structure on
+    the grid pitch.
+
+    ``radius_um`` switches to a circular test around the cell centre, for the
+    case where a failure is deliberately being credited to every cell within
+    some distance of it -- an uncertainty-aware assignment, not containment.
+
+    ``distance_to_nearest_failure`` is Euclidean in both modes.
+
+    Returns failure_present, failure_count and distance_to_nearest_failure for
+    every cell. A cell may legitimately hold more than one failure, and with
+    an overlapping grid one failure legitimately lands in several cells.
     """
     cx = np.array([c.x_center for c in grid.cells])
     cy = np.array([c.y_center for c in grid.cells])
@@ -101,16 +114,35 @@ def map_to_grid(failures: FailureSet, grid, *, radius_um: float | None = None
                 "failure_count": np.zeros(n, np.int32),
                 "distance_to_nearest_failure": np.full(n, np.inf)}
 
-    # Blocked distance computation keeps memory bounded on real grids.
+    x0 = np.array([c.x0 for c in grid.cells])
+    y0 = np.array([c.y0 for c in grid.cells])
+    x1 = np.array([c.x1 for c in grid.cells])
+    y1 = np.array([c.y1 for c in grid.cells])
+    # Bounds are half-open so that a failure on a shared edge is counted once,
+    # except at the outer edge of the grid, where closing the interval is what
+    # keeps a failure exactly on the die boundary from belonging to no cell.
+    close_x = x1 >= grid.bbox.xmax - 1e-9
+    close_y = y1 >= grid.bbox.ymax - 1e-9
+
     nearest = np.empty(n)
     count = np.zeros(n, np.int32)
-    r = (grid.scale_um / 2) if radius_um is None else float(radius_um)
     block = 4096
     for s in range(0, n, block):
         e = min(s + block, n)
         d = np.hypot(cx[s:e, None] - fx[None, :], cy[s:e, None] - fy[None, :])
         nearest[s:e] = d.min(axis=1)
-        count[s:e] = (d <= r).sum(axis=1)
+        if radius_um is None:
+            inside = (
+                (fx[None, :] >= x0[s:e, None])
+                & (np.where(close_x[s:e, None], fx[None, :] <= x1[s:e, None],
+                            fx[None, :] < x1[s:e, None]))
+                & (fy[None, :] >= y0[s:e, None])
+                & (np.where(close_y[s:e, None], fy[None, :] <= y1[s:e, None],
+                            fy[None, :] < y1[s:e, None]))
+            )
+        else:
+            inside = d <= float(radius_um)
+        count[s:e] = inside.sum(axis=1)
 
     return {"failure_present": (count > 0).astype(np.int8),
             "failure_count": count,

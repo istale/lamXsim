@@ -91,30 +91,41 @@ def to_grid(df: pd.DataFrame, grid: Grid, conversion: MarkerConversion,
             *, tol_um: float | None = None) -> np.ndarray:
     """Snap Calibre window values onto *grid*, applying the conversion.
 
+    Matching is nearest-centre, then a distance check against the tolerance.
+    Bucketing the coordinates instead -- rounding both sides to a common grid
+    and comparing keys -- rejects pairs that are well inside the tolerance
+    whenever they straddle a bucket edge: at a 50 um tolerance a window 26 um
+    from its cell centre lands in the neighbouring bucket and is dropped.
+
     Unreported windows become 0.0, which is what Calibre's omission of empty
-    windows means -- but the count of them is checked against the grid so a
-    coordinate-frame mismatch shows up as a near-empty map rather than as a
-    map of zeros that looks plausible.
+    windows means -- but a complete failure to match is raised, so a
+    coordinate-frame mismatch surfaces as an error rather than as a map of
+    zeros that looks plausible.
     """
-    tol = (grid.stride_um / 2) if tol_um is None else tol_um
+    from scipy.spatial import cKDTree
+
+    tol = (grid.stride_um / 2) if tol_um is None else float(tol_um)
     out = np.zeros(len(grid), dtype=float)
 
-    cx = np.array([c.x_center for c in grid.cells])
-    cy = np.array([c.y_center for c in grid.cells])
-    order = np.lexsort((cx, cy))
-    key = {(round(cx[i] / tol), round(cy[i] / tol)): i for i in order}
+    centres = np.column_stack([[c.x_center for c in grid.cells],
+                               [c.y_center for c in grid.cells]])
+    points = df[["x_um", "y_um"]].to_numpy(float)
+    if len(points) == 0:
+        raise ValueError("no Calibre density records to map")
 
-    hit = 0
-    for x, y, v in zip(df["x_um"], df["y_um"], df["value"]):
-        i = key.get((round(x / tol), round(y / tol)))
-        if i is None:
-            continue
-        out[i] = v * conversion.factor
-        hit += 1
+    distance, index = cKDTree(centres).query(points, k=1)
+    matched = distance <= tol
 
-    if hit == 0:
+    values = df["value"].to_numpy(float) * conversion.factor
+    # Later records win on a tie, matching the previous behaviour; Calibre
+    # emits one record per window, so a collision means the deck and the grid
+    # disagree about WINDOW/STEP.
+    out[index[matched]] = values[matched]
+
+    if not matched.any():
         raise ValueError(
-            "no Calibre window matched a grid cell; the layout origin or the "
+            f"no Calibre window matched a grid cell within {tol:g}um "
+            f"(closest was {distance.min():.3g}um); the layout origin or the "
             "WINDOW/STEP in the deck does not match this grid")
     return out
 
