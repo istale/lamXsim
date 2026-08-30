@@ -214,6 +214,7 @@ def test_pipeline_refuses_when_no_failure_lands_on_the_die(tmp_path):
     path = str(tmp_path / "die.gds")
     validation_die(path, die_um=500.0, block_um=50.0, seed=1)
     far_away = _failures([(1e6, 1e6), (1.1e6, 1e6)])
-    with pytest.raises(ValueError, match="bounding box|could be scored"):
+    with pytest.raises(ValueError,
+                       match="outside the inspected footprint|bounding box|could be scored"):
         pipeline.run(path, far_away, layer=LayerSpec("M8", 8, 0),
                      scales_um=(100,), n_permutations=0)

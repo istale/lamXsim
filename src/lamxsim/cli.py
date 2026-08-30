@@ -204,8 +204,10 @@ def cmd_run(args) -> int:
         scales_um=tuple(scales), n_permutations=manifest.n_permutations,
         with_gradients=manifest.with_gradients,
         pair_selection=manifest.pair_selection,
-        line_end_w_max_um=manifest.line_end_w_max_um(), seed=args.seed,
-        allow_pooling_modes=args.allow_pooling_modes)
+        line_end_w_max_um=manifest.line_end_w_max_um(),
+        line_rules=manifest.line_rule_map(), seed=args.seed,
+        allow_pooling_modes=args.allow_pooling_modes,
+        allow_failures_outside_footprint=args.allow_failures_outside_footprint)
     res.metadata["manifest"] = manifest.report()
     if registration_report is not None:
         res.metadata["registration"] = registration_report
@@ -451,6 +453,10 @@ def main(argv=None) -> int:
     rn.add_argument("--block-um", type=float, default=300.0,
                     help="spatial CV block and buffer size")
     rn.add_argument("--n-folds", type=int, default=5)
+    rn.add_argument("--allow-failures-outside-footprint", action="store_true",
+                    help="continue when a failure lies outside the inspected "
+                         "footprint; those failures are dropped and the "
+                         "override is recorded")
     rn.add_argument("--allow-pooling-modes", action="store_true",
                     help="assert that the mixed failure types/layers in the "
                          "file share a defensible mechanism")

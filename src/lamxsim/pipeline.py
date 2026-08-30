@@ -132,16 +132,20 @@ def run(gds_path: str, failures: FailureSet, *,
         footprint: "inspection.InspectionFootprint | None" = None,
         min_coverage: float = 0.5,
         allow_pooling_modes: bool = False,
+        allow_failures_outside_footprint: bool = False,
         die_bbox: "BBox | None" = None,
         top_cell: str | None = None,
-        line_end_w_max_um: float | None = None, seed: int = 0) -> RunResult:
+        line_end_w_max_um: float | None = None,
+        line_rules: "dict[str, tuple[float, float]] | None" = None,
+        seed: int = 0) -> RunResult:
     t0 = time.time()
     specs = layers if layers is not None else [layer]
     if not specs or specs[0] is None:
         raise ValueError("pass layer= or layers=")
 
     reader = LayoutReader(gds_path, top_cell=top_cell)
-    geo_ex = GeometryExtractor(reader, line_end_w_max_um=line_end_w_max_um)
+    geo_ex = GeometryExtractor(reader, line_end_w_max_um=line_end_w_max_um,
+                               line_rules=line_rules)
     ori_ex = OrientationExtractor(reader)
     via_ex = ViaExtractor(reader)
     # Vias are keyed by the metal layer they sit under, so via features carry
@@ -217,11 +221,22 @@ def run(gds_path: str, failures: FailureSet, *,
 
     audit = inspection.audit_failures(footprint, failures, dbu=reader.units.dbu)
     if not audit["consistent"]:
-        context_notes.append(
+        message = (
             f"{audit['n_outside_footprint']} of {audit['n_failures']} failures "
-            f"lie outside the inspected footprint (e.g. {audit['outside_sample_ids']}). "
-            "Something was found where nothing was looked at, so the footprint, "
-            "the registration or the coordinate frame is wrong.")
+            f"lie outside the inspected footprint (e.g. "
+            f"{audit['outside_sample_ids']}). Something was found where nothing "
+            "was looked at, which disproves the population definition rather "
+            "than merely qualifying it: the coordinate frame, the "
+            "registration, the footprint or the die frame is wrong, and each "
+            "of those invalidates a different part of the analysis.")
+        if not allow_failures_outside_footprint:
+            raise ValueError(
+                message + " Fix the input, or pass "
+                "allow_failures_outside_footprint=True to continue with those "
+                "failures dropped -- the override is recorded in the metadata.")
+        context_notes.append(
+            message + " Continuing was asserted by the operator; those "
+            "failures are dropped from the analysis.")
 
     assoc_rows, perm_rows, feat_frames = [], [], []
 
@@ -392,6 +407,7 @@ def run(gds_path: str, failures: FailureSet, *,
         "failure_footprint_audit": audit,
         "pair_selection": pair_selection if len(specs) > 1 else None,
         "with_gradients": with_gradients,
+        "line_rules": line_rules or {},
         "die_bbox_um": [die_bbox.xmin, die_bbox.ymin, die_bbox.xmax, die_bbox.ymax],
         "geometry_bbox_um": [geometry_bbox.xmin, geometry_bbox.ymin,
                              geometry_bbox.xmax, geometry_bbox.ymax],

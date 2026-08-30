@@ -495,17 +495,6 @@ literature evidence, not by looking at results.
 Accurate as of the current commit. Verified against the code rather than
 recalled.
 
-**Declared semantics not yet fully applied.** The manifest carries a
-`line_max_width_um` and a `min_width_um` per metal layer, but the CLI takes the
-widest value across the stack and applies it to every layer, so an M7 rule of
-1 um is overridden by an M8 rule of 2 um and a wide M7 line can be read as a
-terminated tip. `min_width_um` does not reach extraction at all.
-
-**A failure outside the inspected footprint only warns.** Finding something
-where nothing was looked at disproves the population definition -- the
-coordinate frame, the registration, the footprint or the die frame is wrong --
-and the run continues, quietly dropping those failures.
-
 **Package geometry is partial.** Bump distance and radial/tangential
 decomposition, PI-opening edge and corner distance, crackstop rail distance
 and pad edge distance exist. Not yet expressed: routing orientation relative to

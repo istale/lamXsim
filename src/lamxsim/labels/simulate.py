@@ -43,6 +43,13 @@ def failures_from_driver(driver: np.ndarray, grid, *, n_failures: int = 120,
         # Registration error: the recorded position is not the true one.
         xs = xs + rng.normal(0, position_sigma_um, size=len(xs))
         ys = ys + rng.normal(0, position_sigma_um, size=len(ys))
+        # A failure is on the die, so a simulated measurement of one stays on
+        # it. Letting the jitter carry a near-edge failure off the die would
+        # manufacture the very contradiction the footprint audit exists to
+        # detect on real data, and mask it as ordinary simulation noise.
+        b = grid.bbox
+        xs = np.clip(xs, b.xmin, b.xmax)
+        ys = np.clip(ys, b.ymin, b.ymax)
 
     df = pd.DataFrame({
         "sample_id": [f"S{i:04d}" for i in range(len(xs))],

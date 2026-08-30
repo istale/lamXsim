@@ -68,10 +68,19 @@ class GeometryExtractor:
 
     def __init__(self, reader: LayoutReader, *,
                  line_end_w_max_um: float | None = None,
+                 line_rules: "dict[str, tuple[float, float]] | None" = None,
                  line_end_aspect: float = lineends.DEFAULT_ASPECT):
+        """``line_rules`` maps a layer name to (min_width_um, line_max_width_um).
+
+        Per layer, because the rules differ per layer: applying the widest
+        cutoff in the stack to every layer lets a wide line on a finer layer be
+        read as a terminated tip. ``line_end_w_max_um`` remains as a single
+        fallback for callers with one layer and no manifest.
+        """
         self.reader = reader
         self.u = reader.units
         self.line_end_w_max_um = line_end_w_max_um
+        self.line_rules = line_rules or {}
         self.line_end_aspect = line_end_aspect
         self._line_end_cache: dict[tuple[int, int], np.ndarray] = {}
         self._corner_cache: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] = {}
@@ -97,14 +106,27 @@ class GeometryExtractor:
         if spec.key in self._line_end_cache:
             return self._line_end_cache[spec.key]
         region = self.reader.region(spec)
-        if self.line_end_w_max_um is None:
-            # No layer width configured: fall back to the shortest edge present,
-            # scaled by the recommended ratio.
+        rule = self.line_rules.get(spec.name)
+        if rule is not None:
+            min_width_um, w_max = rule
+        elif self.line_end_w_max_um is not None:
+            min_width_um, w_max = None, self.line_end_w_max_um
+        else:
+            # Nothing declared: fall back to the shortest edge present, which
+            # on a layout carrying dummy fill is the fill edge rather than a
+            # routing width. The manifest exists to avoid this.
             edges = region.edges()
             shortest = min((e.length() for e in edges.each()), default=0)
+            min_width_um = None
             w_max = self.u.dbu_to_um(shortest) * lineends.DEFAULT_WMAX_RATIO
-        else:
-            w_max = self.line_end_w_max_um
+
+        if min_width_um is not None:
+            # Below the drawn minimum width nothing is a routing line, so a
+            # cap shorter than it is an artefact of merging or of off-grid
+            # geometry rather than a terminated tip.
+            region = region.sized(-self.u.um_to_dbu(min_width_um / 2)).sized(
+                self.u.um_to_dbu(min_width_um / 2))
+
         ends = lineends.detect(region, self.u.um_to_dbu(w_max),
                                aspect=self.line_end_aspect)
         pts = np.array([[self.u.dbu_to_um(e.x), self.u.dbu_to_um(e.y)]

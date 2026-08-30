@@ -160,9 +160,9 @@ without pretending to know hidden physics. Status verified against the code.
 6. **Partly.** Bump-relative radial and tangential offsets exist. Routing
    *orientation* relative to the bump radial direction does not, so Rabie's
    diagonal final-metal lever cannot be tested directly.
-7. **Partly.** The line-end width comes from the manifest rather than the
-   shortest edge, but the CLI applies the widest rule in the stack to every
-   layer, and `min_width_um` does not reach extraction.
+7. **Done.** Line rules are applied per layer, and `min_width_um` opens the
+   layer before detection so a cap narrower than the drawn minimum is not read
+   as a tip.
 8. **Done.** `lamxsim run` fits registration, applies it to the failure set,
    propagates the leave-one-out error into the scale gate and analyses only the
    scales that survive.
@@ -174,18 +174,14 @@ without pretending to know hidden physics. Status verified against the code.
 
 ### A'. Remaining, in the order they change a conclusion
 
-1. Per-layer PDK line rules, and `min_width_um` reaching extraction (item 7
-   above).
-2. A failure outside the inspected footprint should stop the run rather than
-   warn: it disproves the population definition.
-3. Routing orientation relative to the bump radial direction, PI-opening shape
+1. Routing orientation relative to the bump radial direction, PI-opening shape
    descriptors, pad overlap fraction.
-4. Seal ring, slotting, dummy fill and wide-metal discontinuity as families.
-5. Per-die inspection footprints, and an explicit assertion that every die
+2. Seal ring, slotting, dummy fill and wide-metal discontinuity as families.
+3. Per-die inspection footprints, and an explicit assertion that every die
    shares the layout revision being analysed.
-6. `failed_layer` and `failed_interface` used to stratify rather than only to
+4. `failed_layer` and `failed_interface` used to stratify rather than only to
    refuse pooling.
-7. A traceability matrix from literature to mechanism to GDS observable to
+5. A traceability matrix from literature to mechanism to GDS observable to
    unidentifiable parameter to statistical test.
 
 ### B. Not recoverable from ordinary GDS

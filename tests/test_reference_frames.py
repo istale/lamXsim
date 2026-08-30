@@ -17,6 +17,7 @@ from lamxsim.layout.synth import packaged_die, validation_die
 from lamxsim.stats.permutation import block_permutation_test
 
 M8 = LayerSpec("M8", 8, 0)
+MANIFEST_PATH = "config/study_manifest.yaml"
 
 
 @pytest.fixture(scope="module")
@@ -211,3 +212,83 @@ def test_pad_features_appear_only_when_a_pad_layer_is_supplied(packaged):
     ctx = ctx_extract(grid, reader.bbox(), reader, layers)
     assert np.isnan(ctx["distance_to_pad_edge"]).all()
     assert (ctx["under_pad_indicator"] == 0).all()
+
+
+# ---- B1: per-layer PDK rules ---------------------------------------
+
+def test_line_rules_are_applied_per_layer(tmp_path):
+    """Collapsing the stack to one cutoff misreads a wide line as a tip.
+
+    M8 routes at 2um and M7 at 1um. Applying the widest rule in the stack to
+    every layer lets an M7 power strap of 1.8um qualify as a terminated
+    routing line.
+    """
+    from lamxsim.layout import synth
+
+    sl = synth.SynthLayout()
+    for i in range(6):
+        sl.add_box(8, 0, i * 6.0, 60.0, i * 6.0 + 2.0)      # M8, 2um
+        sl.add_box(7, 0, i * 6.0, 60.0, i * 6.0 + 1.0)      # M7, 1um
+    sl.add_box(7, 0, 40.0, 60.0, 41.8)                       # M7 strap, 1.8um
+    path = tmp_path / "rules.gds"
+    sl.write(str(path))
+    reader = LayoutReader(str(path))
+    m7 = LayerSpec("M7", 7, 0)
+    roi = (0, 0, 60, 50)
+
+    collapsed = GeometryExtractor(reader, line_end_w_max_um=2.0)
+    per_layer = GeometryExtractor(
+        reader, line_rules={"M8": (0.2, 2.0), "M7": (0.1, 1.0)})
+
+    n_collapsed = collapsed.extract_roi(m7, *roi)["line_end_density"] * (60 * 50)
+    n_per_layer = per_layer.extract_roi(m7, *roi)["line_end_density"] * (60 * 50)
+    assert n_collapsed > n_per_layer, "the strap must stop counting as a tip"
+
+
+def test_manifest_exposes_rules_per_layer_not_one_maximum():
+    from lamxsim.study import StudyManifest
+
+    m = StudyManifest.load(MANIFEST_PATH)
+    rules = m.line_rule_map()
+    assert rules["M8"] == (0.20, 2.0)
+    assert rules["M7"] == (0.10, 1.0)
+    # The single-number form remains only as a fallback, and is the maximum.
+    assert m.line_end_w_max_um() == 2.0
+
+
+# ---- B2: a contradiction stops the run -----------------------------
+
+def test_a_failure_outside_the_footprint_stops_the_run(die):
+    """It disproves the population definition rather than qualifying it."""
+    from lamxsim.labels.inspection import InspectionFootprint
+
+    path, reader, fs = die
+    half = InspectionFootprint.from_rectangles([(0, 0, 500, 1000)],
+                                               source="left half only")
+    with pytest.raises(ValueError, match="disproves the population definition"):
+        pipeline.run(path, fs, layer=M8, scales_um=(100,), n_permutations=0,
+                     line_end_w_max_um=4.0, footprint=half)
+
+
+def test_continuing_past_the_contradiction_must_be_asserted(die):
+    from lamxsim.labels.inspection import InspectionFootprint
+
+    path, reader, fs = die
+    half = InspectionFootprint.from_rectangles([(0, 0, 500, 1000)],
+                                               source="left half only")
+    res = pipeline.run(path, fs, layer=M8, scales_um=(100,), n_permutations=0,
+                       line_end_w_max_um=4.0, footprint=half,
+                       allow_failures_outside_footprint=True)
+    assert any("asserted by the operator" in n and "dropped" in n
+               for n in res.metadata["uncontrolled_confounding"])
+
+
+def test_a_consistent_footprint_needs_no_override(die):
+    from lamxsim.labels.inspection import InspectionFootprint
+
+    path, reader, fs = die
+    whole = InspectionFootprint.from_rectangles([(0, 0, 1000, 1000)],
+                                                source="whole die")
+    res = pipeline.run(path, fs, layer=M8, scales_um=(100,), n_permutations=0,
+                       line_end_w_max_um=4.0, footprint=whole)
+    assert res.metadata["failure_footprint_audit"]["consistent"]

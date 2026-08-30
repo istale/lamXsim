@@ -245,11 +245,12 @@ def _inside_any(x, y, reader: LayoutReader, spec: LayerSpec | None) -> np.ndarra
     region = reader.region(spec)
     u = reader.units
     out = np.zeros(len(x), dtype=bool)
-    # A zero-area box intersects nothing, so the probe is one database unit
-    # across -- effectively a point, but with area for the boolean to keep.
+    # A zero-area box intersects nothing, so the probe has area; it is centred
+    # on the point so that a coordinate exactly on a shape boundary is not
+    # reported as outside it.
     for i, (xi, yi) in enumerate(zip(x, y)):
         px, py = u.um_to_dbu(xi), u.um_to_dbu(yi)
-        probe = db.Region(db.Box(px, py, px + 1, py + 1))
+        probe = db.Region(db.Box(px - 1, py - 1, px + 1, py + 1))
         out[i] = not (region & probe).is_empty()
     return out
 

@@ -158,10 +158,20 @@ class StudyManifest:
         return None
 
     def line_end_w_max_um(self) -> float | None:
-        """The widest routing line across the stack, or None if unspecified."""
+        """Single fallback cutoff, for callers that cannot take per-layer rules.
+
+        Prefer :meth:`line_rule_map`. Collapsing the stack to one number lets a
+        wide line on a finer layer be read as a terminated tip -- an M7 rule of
+        1um overridden by an M8 rule of 2um.
+        """
         if not self.line_rules:
             return None
         return max(r.line_max_width_um for r in self.line_rules.values())
+
+    def line_rule_map(self) -> dict[str, tuple[float, float]]:
+        """{layer name: (min_width_um, line_max_width_um)} for the extractor."""
+        return {k: (v.min_width_um, v.line_max_width_um)
+                for k, v in self.line_rules.items()}
 
     def report(self) -> dict:
         return {

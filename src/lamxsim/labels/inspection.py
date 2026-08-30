@@ -145,7 +145,11 @@ def audit_failures(footprint: InspectionFootprint, failures, *,
     inside = np.zeros(len(x), dtype=bool)
     for i, (xi, yi) in enumerate(zip(x, y)):
         px, py = int(round(xi / dbu)), int(round(yi / dbu))
-        probe = db.Region(db.Box(px, py, px + 1, py + 1))
+        # Centred on the point, not extending from it. A one-sided probe at a
+        # coordinate lying exactly on the footprint boundary meets it only
+        # along a line, which has no area, and the failure is reported as
+        # outside -- a contradiction manufactured by the probe.
+        probe = db.Region(db.Box(px - 1, py - 1, px + 1, py + 1))
         inside[i] = not (footprint.region & probe).is_empty()
 
     outside = np.where(~inside)[0]
