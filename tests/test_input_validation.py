@@ -202,7 +202,8 @@ def test_writing_an_empty_association_frame_does_not_raise(tmp_path):
         associations=pd.DataFrame(), permutations=pd.DataFrame(),
         features=pd.DataFrame({"cell_id": [0]}), metadata={})
     paths = pipeline.write_results(result, tmp_path)
-    assert set(paths) >= {"associations", "best_features", "features", "metadata"}
+    assert set(paths) >= {"associations", "features", "metadata",
+                          "primary", "underpowered", "summary"}
 
 
 def test_pipeline_refuses_when_no_failure_lands_on_the_die(tmp_path):

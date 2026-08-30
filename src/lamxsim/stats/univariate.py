@@ -91,21 +91,20 @@ def enrichment(values: np.ndarray, labels: np.ndarray, top_frac: float) -> float
     return float(p_top / p_rest)
 
 
-def effective_n(values: np.ndarray, grid) -> float:
+def effective_n(values: np.ndarray, grid, mask: np.ndarray | None = None) -> float:
     """Spatially-corrected sample size using Moran's I on a rook lattice.
 
     Grid cells are not independent samples. Reporting the raw cell count
     alongside an AUC invites reading a 6400-cell grid as 6400 observations
     when the layout may only vary over a few dozen independent patches.
     """
-    n = len(values)
+    keep = np.ones(len(values), bool) if mask is None else np.asarray(mask, bool)
+    n = int(keep.sum())
     if n < 4:
         return float(n)
-    rows = np.array([c.row for c in grid.cells])
-    cols = np.array([c.col for c in grid.cells])
-    idx = {(r, c): i for i, (r, c) in enumerate(zip(rows, cols))}
-    z = values - values.mean()
-    denom = float((z ** 2).sum())
+    idx = {(c.row, c.col): i for i, c in enumerate(grid.cells) if keep[i]}
+    z = np.where(keep, values - values[keep].mean(), 0.0)
+    denom = float((z[keep] ** 2).sum())
     if denom <= 0:
         return float(n)
     num = 0.0
@@ -175,7 +174,8 @@ def analyse(values: np.ndarray, labels: np.ndarray, *, feature: str, layer: str,
 
 def block_bootstrap_auc_ci(values: np.ndarray, labels: np.ndarray, grid, *,
                            n_boot: int = 999, block_cells: int | None = None,
-                           alpha: float = 0.05, seed: int = 0
+                           alpha: float = 0.05, seed: int = 0,
+                           mask: np.ndarray | None = None
                            ) -> tuple[float, float]:
     """Percentile CI for an AUC, resampling contiguous blocks of cells.
 
@@ -192,7 +192,10 @@ def block_bootstrap_auc_ci(values: np.ndarray, labels: np.ndarray, grid, *,
     rows = np.array([c.row for c in grid.cells])
     cols = np.array([c.col for c in grid.cells])
     bid = (rows // block_cells) * (grid.n_cols // block_cells + 1) + (cols // block_cells)
-    groups = [np.where(bid == b)[0] for b in np.unique(bid)]
+    keep = np.ones(len(values), bool) if mask is None else np.asarray(mask, bool)
+    groups = [g[keep[g]] for g in
+              (np.where(bid == b)[0] for b in np.unique(bid))]
+    groups = [g for g in groups if len(g)]
     if len(groups) < 3:
         return (float("nan"), float("nan"))
 

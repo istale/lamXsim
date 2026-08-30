@@ -1,0 +1,67 @@
+# Study manifest: the human-supplied semantics that give GDS physical meaning.
+#
+# GDS layer numbers are identifiers, not engineering semantics. Everything in
+# this file is a claim about the technology and the measurement campaign that
+# someone has to own; the run records it verbatim so a result can be read
+# against the assumptions it was produced under.
+#
+# See docs/first_principles_engineering.md for what each entry commits to.
+
+layout:
+  top_cell: null            # null = the layout's single top cell, else name it
+  # The bounding box of arbitrary top-cell geometry is not the physical die.
+  # Give the outline explicitly when it is known.
+  die_outline_um: null      # [xmin, ymin, xmax, ymax]
+
+  # Ordered metal stack, topmost first. Order matters: cross-layer features
+  # are signed and named by it, and "top vs underlying" is defined from it.
+  metal_layers:
+    - {name: M8, layer: 8, datatype: 0}
+    - {name: M7, layer: 7, datatype: 0}
+
+  # Via layers, keyed by the metal layer they sit under, so via features
+  # carry that layer's identity into the association table.
+  via_layers:
+    M8: {name: V7, layer: 17, datatype: 0}
+
+  # Package context. Absent layers are recorded as uncontrolled confounding
+  # rather than silently ignored -- every layout lever in Rabie et al. (2018)
+  # is defined relative to bumps.
+  package_layers:
+    bump: {name: BUMP, layer: 60, datatype: 0}
+    pad: null
+    pi_opening: {name: PI, layer: 61, datatype: 0}
+    crackstop: {name: CS, layer: 62, datatype: 0}
+
+  # PDK-informed, per metal layer. The line-end definition needs to know what
+  # counts as a routing line; without these it falls back to the shortest edge
+  # in the design, which on a layout with dummy fill is the fill edge.
+  line_rules:
+    M8: {min_width_um: 0.20, line_max_width_um: 2.0}
+    M7: {min_width_um: 0.10, line_max_width_um: 1.0}
+
+inspection:
+  # Where inspection had a real opportunity to find a failure. One of:
+  #   gds_layer: {name: INSP, layer: 90, datatype: 0}
+  #   rectangles: [[x0, y0, x1, y1], ...]
+  #   full_die: "justification for claiming whole-die coverage"
+  footprint:
+    full_die: null
+  min_coverage: 0.5         # a cell inspected less than this takes no part
+
+registration:
+  # CSV with layout_x_um, layout_y_um, measured_x_um, measured_y_um.
+  # Without it, position_sigma_um must come from the failure file itself and
+  # no scale can be certified from measured fiducials.
+  fiducials: null
+  allow_reflection: true    # backside imaging mirrors the frame
+
+analysis:
+  # Committed before looking at failures (spec sections 12-14).
+  scales_um: [25, 50, 100, 250, 500, 1000]
+  pair_selection: adjacent_and_top
+  with_gradients: true
+  n_permutations: 999
+  # Scales below 3x the positional uncertainty are excluded from primary
+  # results rather than reported with a caveat.
+  enforce_scale_gate: true

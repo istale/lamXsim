@@ -78,7 +78,8 @@ def autocorrelation_range_cells(values: np.ndarray, grid, threshold: float = 0.2
 def block_permutation_test(values: np.ndarray, labels: np.ndarray, grid, *,
                            statistic=None, n_permutations: int = 999,
                            block_cells: int | None = None,
-                           seed: int = 0) -> PermutationResult:
+                           seed: int = 0,
+                           mask: np.ndarray | None = None) -> PermutationResult:
     """Permute labels in contiguous square blocks and compare the statistic."""
     from .univariate import roc_auc
 
@@ -94,10 +95,12 @@ def block_permutation_test(values: np.ndarray, labels: np.ndarray, grid, *,
     cols = np.array([c.col for c in grid.cells])
     block_id = (rows // block_cells) * (grid.n_cols // block_cells + 1) + (cols // block_cells)
 
-    uniq = np.unique(block_id)
-    groups = [np.where(block_id == b)[0] for b in uniq]
+    keep = np.ones(len(values), bool) if mask is None else np.asarray(mask, bool)
+    groups = [g[keep[g]] for g in
+              (np.where(block_id == b)[0] for b in np.unique(block_id))]
+    groups = [g for g in groups if len(g)]
 
-    observed = statistic(values, labels)
+    observed = statistic(values[keep], labels[keep])
     rng = np.random.default_rng(seed)
     null = np.empty(n_permutations)
     for k in range(n_permutations):
@@ -113,7 +116,7 @@ def block_permutation_test(values: np.ndarray, labels: np.ndarray, grid, *,
                 take = np.concatenate([take, pool[:len(g) - len(take)]])
             shuffled[g] = take
             pos += len(g)
-        null[k] = statistic(values, shuffled)
+        null[k] = statistic(values[keep], shuffled[keep])
 
     finite = null[np.isfinite(null)]
     # Two-sided, centred on the null mean so a protective (AUC < 0.5)

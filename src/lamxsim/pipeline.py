@@ -26,9 +26,10 @@ from .features.geometry import GeometryExtractor
 from .features.grid import build_multiscale
 from .features.orientation import OrientationExtractor
 from .features.vias import ViaExtractor
-from .labels import package_context, position
+from .labels import inspection, package_context, position
 from .labels.failure import FailureSet, map_to_grid
 from .layout.reader import LayerSpec, LayoutReader
+from . import report as report_mod
 from .stats import fdr, permutation, univariate
 
 #: Hypothesis tiers, sourced from references/feature_evidence_map.csv.
@@ -115,6 +116,8 @@ def run(gds_path: str, failures: FailureSet, *,
         include_position: bool = True, with_gradients: bool = True,
         pair_selection: str = "adjacent_and_top",
         package_layers: "package_context.PackageLayers | None" = None,
+        footprint: "inspection.InspectionFootprint | None" = None,
+        min_coverage: float = 0.5,
         line_end_w_max_um: float | None = None, seed: int = 0) -> RunResult:
     t0 = time.time()
     specs = layers if layers is not None else [layer]
@@ -136,13 +139,46 @@ def run(gds_path: str, failures: FailureSet, *,
     package_layers = package_layers or package_context.PackageLayers()
     context_notes = package_context.absent_context_note(package_layers)
 
+    # An uninspected cell is not a control, it is missing data. Without a
+    # footprint the analysis silently treats never-inspected area as clean,
+    # and any feature correlated with where inspection was targeted picks up
+    # an association from that alone.
+    if footprint is None:
+        footprint = inspection.InspectionFootprint.full_die(
+            bbox, "no inspection footprint supplied", dbu=reader.units.dbu)
+        context_notes.append(
+            "no inspection footprint supplied: the whole die is being treated "
+            "as inspected, so every cell without a recorded failure counts as "
+            "a control. If inspection was partial or targeted, features "
+            "correlated with where it was targeted will show spurious "
+            "association.")
+    audit = inspection.audit_failures(footprint, failures, dbu=reader.units.dbu)
+    if not audit["consistent"]:
+        context_notes.append(
+            f"{audit['n_outside_footprint']} of {audit['n_failures']} failures "
+            f"lie outside the inspected footprint (e.g. {audit['outside_sample_ids']}). "
+            "Something was found where nothing was looked at, so the footprint, "
+            "the registration or the coordinate frame is wrong.")
+
     assoc_rows, perm_rows, feat_frames = [], [], []
 
+    coverage_summary = {}
     for scale, grid in sorted(grids.items()):
         labels = map_to_grid(failures, grid)
         y = labels["failure_present"].astype(int)
 
+        eligible, cover = inspection.eligibility(
+            footprint, grid, min_coverage=min_coverage, dbu=reader.units.dbu)
+        coverage_summary[scale] = {
+            "n_cells": len(grid), "n_eligible": int(eligible.sum()),
+            "n_cases_eligible": int(y[eligible].sum()),
+            "n_cases_excluded": int(y[~eligible].sum()),
+            "mean_coverage": float(cover.mean()),
+        }
+
         frame = pd.DataFrame(grid.to_arrays())
+        frame["inspected_fraction"] = cover
+        frame["eligible"] = eligible
         frame["failure_present"] = y
         frame["distance_to_nearest_failure"] = labels["distance_to_nearest_failure"]
 
@@ -172,7 +208,7 @@ def run(gds_path: str, failures: FailureSet, *,
 
         for name, layer_name, vals, ecls in columns:
             frame[f"{name}|{layer_name}"] = vals
-            finite = np.isfinite(vals)
+            finite = np.isfinite(vals) & eligible
             if finite.sum() < 8 or y[finite].sum() == 0:
                 continue
             a = univariate.analyse(vals[finite], y[finite], feature=name,
@@ -181,21 +217,23 @@ def run(gds_path: str, failures: FailureSet, *,
             # effective_n and the CI need the grid, so only compute them on the
             # complete field; a gradient with its boundary ring dropped is
             # scored without them rather than with a wrong neighbour graph.
-            if finite.all():
-                a.effective_n = univariate.effective_n(vals, grid)
+            if np.isfinite(vals).all():
+                a.effective_n = univariate.effective_n(vals, grid, mask=eligible)
                 a.auc_ci_low, a.auc_ci_high = univariate.block_bootstrap_auc_ci(
-                    vals, y, grid, n_boot=299, seed=seed)
+                    vals, y, grid, n_boot=299, seed=seed, mask=eligible)
             row = a.as_row()
             row["evidence_class"] = ecls.value
             row["n_cells"] = len(grid)
+            row["n_eligible"] = int(eligible.sum())
             row["n_finite"] = int(finite.sum())
             row["scale_trustworthy"] = (
                 bool(scale >= scale_floor) if np.isfinite(scale_floor) else None)
             assoc_rows.append((a, row))
 
-            if n_permutations and finite.all():
+            if n_permutations and np.isfinite(vals).all():
                 pr = permutation.block_permutation_test(
-                    vals, y, grid, n_permutations=n_permutations, seed=seed)
+                    vals, y, grid, n_permutations=n_permutations, seed=seed,
+                    mask=eligible)
                 p = pr.as_row()
                 p.update(feature=name, layer=layer_name, scale_um=scale)
                 perm_rows.append(p)
@@ -223,6 +261,10 @@ def run(gds_path: str, failures: FailureSet, *,
         "package_layers": {k: (str(v) if v else None) for k, v in
                            vars(package_layers).items()},
         "uncontrolled_confounding": context_notes,
+        "inspection_footprint": footprint.report(reader.units.dbu),
+        "min_coverage": min_coverage,
+        "coverage_by_scale": coverage_summary,
+        "failure_footprint_audit": audit,
         "pair_selection": pair_selection if len(specs) > 1 else None,
         "with_gradients": with_gradients,
         "die_bbox_um": [bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax],
@@ -256,13 +298,12 @@ def write_results(result: RunResult, outdir: str | Path) -> dict[str, str]:
     result.associations.to_csv(p, index=False)
     paths["associations"] = str(p)
 
-    best = result.associations.copy()
-    if "effect_size" in best.columns:
-        best["abs_effect"] = best["effect_size"].abs()
-        best = best.sort_values("abs_effect", ascending=False)
-    p = out / "features" / "best_features.csv"
-    best.to_csv(p, index=False)
-    paths["best_features"] = str(p)
+    # Partitioned by what each row may claim, rather than ranked together.
+    # A single ranking puts an exploratory descriptor at an unsupported scale
+    # above a literature-backed feature at a supported one, with nothing in
+    # the file to tell them apart.
+    paths.update(report_mod.write(result.associations, out,
+                                  metadata=result.metadata))
 
     p = out / "features" / "spatial_features.parquet"
     result.features.to_parquet(p, index=False)

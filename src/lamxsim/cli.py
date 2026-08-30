@@ -23,6 +23,7 @@ from .layout.reader import LayerSpec, LayoutReader
 from .layout.synth import validation_die
 from .registration.apply import load_fiducials, scale_gate
 from .registration.fit import robust_fit
+from .study import StudyManifest
 from .stats import ablation, power
 from .stats.cv import buffered_block_folds, grouped_folds, leakage_report
 from . import pipeline
@@ -124,19 +125,137 @@ def cmd_thinslice(args) -> int:
 
 
 def cmd_run(args) -> int:
-    cfg = _load_config(args.config)
-    lyr = cfg.get("layer", {"name": "M8", "layer": 8, "datatype": 0})
-    layer = LayerSpec(lyr["name"], lyr["layer"], lyr.get("datatype", 0))
-    fs = load_failures(args.failures)
-    if fs.notes:
-        print("failure import notes:")
-        for n in fs.notes:
-            print(f"  - {n}")
-    res = pipeline.run(args.gds, fs, layer=layer,
-                       scales_um=tuple(cfg.get("scales_um", [25, 50, 100, 250, 500, 1000])),
-                       n_permutations=cfg.get("n_permutations", 999))
+    """The real-data workflow: manifest -> registration -> gated analysis.
+
+    Every step that can invalidate a result runs here rather than being left
+    to the operator to remember: the manifest is checked against the layout,
+    registration is fitted and its error propagated into the scale gate, and
+    scales the registration cannot support are dropped before any statistic
+    is computed rather than being reported with a caveat.
+    """
+    from .registration.apply import register, scale_gate
+    from .stats.cv import buffered_block_folds, leakage_report
+    from .stats import ablation
+
+    manifest = StudyManifest.load(args.manifest)
+    reader = LayoutReader(args.gds, top_cell=manifest.top_cell)
+    manifest.validate_against(reader)
+    bbox = manifest.die_bbox(reader)
+
+    print(f"layout   : {args.gds}")
+    print(f"  die    : [{bbox.xmin:g}, {bbox.ymin:g}] to [{bbox.xmax:g}, {bbox.ymax:g}] um"
+          f"{'' if manifest.die_outline_um else '  (from geometry bbox, not a declared outline)'}")
+    print(f"  metal  : {[str(m) for m in manifest.metal_layers]}")
+    print(f"  vias   : {{{', '.join(f'{k}: {v}' for k, v in manifest.via_layers.items())}}}")
+    if manifest.gaps:
+        print("\ndeclared gaps in the manifest:")
+        for g in manifest.gaps:
+            print(f"  - {g}")
+
+    failures = load_failures(args.failures)
+    for n in failures.notes:
+        print(f"  failure import: {n}")
+
+    # -- registration ------------------------------------------------
+    scales = list(manifest.scales_um)
+    registration_report = None
+    if manifest.fiducials:
+        src, dst, names = load_fiducials(manifest.fiducials)
+        fit_result, keep, _ = robust_fit(
+            src, dst, allow_reflection=manifest.allow_reflection)
+        failures = register(failures, fit_result)
+        gate = scale_gate(fit_result, scales)
+        registration_report = gate
+        print(f"\nregistration: {fit_result.model} from {int(keep.sum())}/{len(src)} "
+              f"fiducials, leave-one-out RMS {fit_result.position_sigma_um:.2f}um")
+        for w in fit_result.warnings:
+            print(f"  WARNING: {w}")
+        if manifest.enforce_scale_gate:
+            dropped = gate["rejected"]
+            scales = gate["trustworthy"]
+            print(f"  scale gate: analysing {scales}um; {dropped}um dropped")
+            if not scales:
+                print("  no configured scale survives the registration accuracy; "
+                      "nothing can be analysed")
+                return 1
+    else:
+        floor = failures.min_trustworthy_scale_um()
+        if manifest.enforce_scale_gate and np.isfinite(floor):
+            keep_scales = [s for s in scales if s >= floor]
+            print(f"\nscale gate from the failure file's own sigma "
+                  f"({failures.position_sigma_um:g}um): analysing {keep_scales}um")
+            scales = keep_scales
+            if not scales:
+                return 1
+
+    # -- analysis ----------------------------------------------------
+    footprint = manifest.footprint(reader, bbox)
+    res = pipeline.run(
+        args.gds, failures, layers=manifest.metal_layers,
+        via_layers=manifest.via_layers, package_layers=manifest.package_layers,
+        footprint=footprint, min_coverage=manifest.min_coverage,
+        scales_um=tuple(scales), n_permutations=manifest.n_permutations,
+        with_gradients=manifest.with_gradients,
+        pair_selection=manifest.pair_selection,
+        line_end_w_max_um=manifest.line_end_w_max_um(), seed=args.seed)
+    res.metadata["manifest"] = manifest.report()
+    if registration_report is not None:
+        res.metadata["registration"] = registration_report
+
+    print(f"\nanalysed {len(res.associations)} feature x layer x scale combinations")
+    for note in res.metadata["uncontrolled_confounding"]:
+        print(f"  UNCONTROLLED: {note}")
+
+    # -- ablation against the position baseline ----------------------
+    if args.ablation:
+        from .features.grid import build_grid
+        # The finest scale that survived the gate, because it carries the most
+        # cells and therefore the most usable folds once a buffer is removed.
+        # Picking the scale after seeing which one associates best would be
+        # choosing the hypothesis from the result.
+        scale = args.ablation_scale_um or min(scales)
+        if scale not in scales:
+            print(f"\nablation skipped: scale {scale:g}um is not among the "
+                  f"analysed scales {scales}")
+            args.ablation = False
+        grid = build_grid(bbox, scale)
+        frame = res.features[res.features.scale_um == scale]
+        y = frame["failure_present"].to_numpy(int)
+        folds = buffered_block_folds(grid, block_um=args.block_um,
+                                     n_folds=args.n_folds,
+                                     buffer_um=args.block_um)
+        leak = leakage_report(folds, grid, min_separation_um=args.block_um)
+        try:
+            result = ablation.run(frame, y, folds, seed=args.seed)
+        except ValueError as exc:
+            print(f"\nablation skipped: {exc}")
+            print(f"  ({len(grid)} cells at {scale:g}um, {y.sum()} cases, "
+                  f"{len(folds)} folds at block {args.block_um:g}um -- either "
+                  "use a finer scale or a smaller block)")
+        else:
+            deltas = pd.DataFrame(result.deltas)
+            core = deltas[~deltas.model.str.contains(r"\+position")]
+            print(f"\n=== does geometry add anything beyond position? "
+                  f"({scale:g}um, {len(folds)} buffered folds) ===")
+            print(core[["model", "model_auc", "baseline_auc", "delta_auc",
+                        "ci_low", "ci_high", "adds_information"]]
+                  .to_string(index=False, float_format=lambda v: f"{v:+.4f}"))
+            out = Path(args.outdir) / "model"
+            out.mkdir(parents=True, exist_ok=True)
+            result.table.to_csv(out / "ablation_models.csv", index=False)
+            deltas.to_csv(out / "ablation_deltas.csv", index=False)
+            res.metadata["ablation_cv"] = leak
+
+    from . import report as report_mod
+    print("\n=== primary results ===")
+    print("(literature-backed geometry, FDR-corrected, at a scale the "
+          "registration supports, with both classes populated)")
+    print(report_mod.format_primary(res.associations, limit=10))
+
     paths = pipeline.write_results(res, args.outdir)
-    print(json.dumps(paths, indent=2))
+    print("\nwritten:")
+    for k, v in paths.items():
+        print(f"  {k:18s} {v}")
     return 0
 
 
@@ -292,11 +411,20 @@ def main(argv=None) -> int:
                     help="refuse a mirrored fit (frontside imaging)")
     rg.set_defaults(func=cmd_register)
 
-    rn = sub.add_parser("run", help="run on a real layout and failure CSV")
+    rn = sub.add_parser("run", help="real-data workflow driven by a study manifest")
     rn.add_argument("gds")
     rn.add_argument("failures")
-    rn.add_argument("--config", default="config/thin_slice.yaml")
+    rn.add_argument("--manifest", default="config/study_manifest.yaml")
     rn.add_argument("--outdir", default="results")
+    rn.add_argument("--seed", type=int, default=0)
+    rn.add_argument("--ablation", action="store_true",
+                    help="also fit the position baseline and feature ablation")
+    rn.add_argument("--block-um", type=float, default=300.0,
+                    help="spatial CV block and buffer size")
+    rn.add_argument("--n-folds", type=int, default=5)
+    rn.add_argument("--ablation-scale-um", type=float, default=None,
+                    help="scale for the multivariate model; defaults to the "
+                         "finest scale that survived the registration gate")
     rn.set_defaults(func=cmd_run)
 
     args = ap.parse_args(argv)
