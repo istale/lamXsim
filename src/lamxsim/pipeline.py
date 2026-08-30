@@ -28,7 +28,20 @@ from .features.orientation import OrientationExtractor
 from .features.vias import ViaExtractor
 from .labels import inspection, package_context, position
 from .labels.failure import FailureSet, map_to_grid, map_to_grid_per_die
-from .layout.reader import LayerSpec, LayoutReader
+from .layout.reader import BBox, LayerSpec, LayoutReader
+
+
+def _fmt(b) -> str:
+    return f"[{b.xmin:g}, {b.ymin:g}] to [{b.xmax:g}, {b.ymax:g}]um"
+
+
+def _covers(outer, inner, tol: float = 1e-6) -> bool:
+    return (outer.xmin <= inner.xmin + tol and outer.ymin <= inner.ymin + tol
+            and outer.xmax >= inner.xmax - tol and outer.ymax >= inner.ymax - tol)
+
+
+def _is_roi(die, geometry, tol: float = 1e-6) -> bool:
+    return (die.width > geometry.width + tol or die.height > geometry.height + tol)
 from . import report as report_mod
 from .stats import fdr, permutation, univariate
 
@@ -119,13 +132,15 @@ def run(gds_path: str, failures: FailureSet, *,
         footprint: "inspection.InspectionFootprint | None" = None,
         min_coverage: float = 0.5,
         allow_pooling_modes: bool = False,
+        die_bbox: "BBox | None" = None,
+        top_cell: str | None = None,
         line_end_w_max_um: float | None = None, seed: int = 0) -> RunResult:
     t0 = time.time()
     specs = layers if layers is not None else [layer]
     if not specs or specs[0] is None:
         raise ValueError("pass layer= or layers=")
 
-    reader = LayoutReader(gds_path)
+    reader = LayoutReader(gds_path, top_cell=top_cell)
     geo_ex = GeometryExtractor(reader, line_end_w_max_um=line_end_w_max_um)
     ori_ex = OrientationExtractor(reader)
     via_ex = ViaExtractor(reader)
@@ -133,12 +148,49 @@ def run(gds_path: str, failures: FailureSet, *,
     # that metal layer's identity into the association table rather than
     # appearing as an unattached layer of their own.
     via_layers = via_layers or {}
-    bbox = reader.bbox()
-    grids = build_multiscale(bbox, scales_um)
+    # Three frames, kept apart because they answer different questions and
+    # substituting one for another silently changes what the die is.
+    #
+    #   geometry_bbox -- what this file actually contains. Sets the grid,
+    #                    because features only exist where geometry does.
+    #   die_bbox      -- the physical die the operator declares. Sets the die
+    #                    centre, normalised position, edge distance and the
+    #                    radial direction bump context is resolved along.
+    #   footprint     -- where inspection looked. Sets the eligible population.
+    #
+    # Using the geometry bbox as the die is only correct when the file is the
+    # whole die. On a region of interest it puts the die centre inside the
+    # region, and every position feature and bump radial direction is then
+    # measured from the wrong origin.
+    geometry_bbox = reader.bbox()
+    if die_bbox is None:
+        die_bbox = geometry_bbox
+        frame_note = ("no die outline declared: the geometry bounding box is "
+                      "being used as the die, which is only correct if this "
+                      "file is the whole die")
+    elif not _covers(die_bbox, geometry_bbox):
+        raise ValueError(
+            f"the declared die outline {_fmt(die_bbox)} does not contain the "
+            f"loaded geometry {_fmt(geometry_bbox)}. One of them is wrong, and "
+            "every position feature depends on which.")
+    elif _is_roi(die_bbox, geometry_bbox):
+        frame_note = (
+            f"region of interest: the file covers {_fmt(geometry_bbox)} of a "
+            f"declared die {_fmt(die_bbox)}. Position features are measured "
+            "from the declared die, but controls exist only inside the loaded "
+            "region, so no claim about which part of the die is worst can be "
+            "made from this run.")
+    else:
+        frame_note = ""
+
+    bbox = die_bbox
+    grids = build_multiscale(geometry_bbox, scales_um)
     stack = LayerStack(tuple(s.name for s in specs))
     scale_floor = failures.min_trustworthy_scale_um()
     package_layers = package_layers or package_context.PackageLayers()
     context_notes = package_context.absent_context_note(package_layers)
+    if frame_note:
+        context_notes.append(frame_note)
 
     # An uninspected cell is not a control, it is missing data. Without a
     # footprint the analysis silently treats never-inspected area as clean,
@@ -146,7 +198,8 @@ def run(gds_path: str, failures: FailureSet, *,
     # an association from that alone.
     if footprint is None:
         footprint = inspection.InspectionFootprint.full_die(
-            bbox, "no inspection footprint supplied", dbu=reader.units.dbu)
+            geometry_bbox, "no inspection footprint supplied",
+            dbu=reader.units.dbu)
         context_notes.append(
             "no inspection footprint supplied: the whole die is being treated "
             "as inspected, so every cell without a recorded failure counts as "
@@ -233,13 +286,14 @@ def run(gds_path: str, failures: FailureSet, *,
                     columns.append((name, "-", v, EvidenceClass.PACKAGE_POSITION))
 
         def observation_groups(cell_values):
-            """Permutation groups combining the spatial block with the die.
+            """Permutation groups: the spatial block, within one die.
 
-            The block size still comes from the feature's own spatial
+            The block size comes from the feature's own spatial
             autocorrelation -- fixing it at one cell would turn the block
             permutation back into the naive per-cell shuffle it exists to
-            replace. The die index is then folded in so a permutation never
-            moves a label between dies.
+            replace. The die index makes each die's blocks distinct, and
+            ``die_index`` is passed separately as the stratum so the exchange
+            stays inside a die; the grouping alone does not achieve that.
             """
             size = max(permutation.autocorrelation_range_cells(cell_values, grid), 1)
             block_of_cell = permutation.spatial_block_ids(grid, size)
@@ -282,8 +336,19 @@ def run(gds_path: str, failures: FailureSet, *,
             row["n_dies"] = len(die_names)
             row["n_eligible"] = int(eligible.sum())
             row["n_finite"] = int(finite.sum())
-            row["scale_trustworthy"] = (
-                bool(scale >= scale_floor) if np.isfinite(scale_floor) else None)
+            # Tri-state on purpose. "We do not know the registration
+            # accuracy" is not "the registration is good enough"; at 5-10um
+            # line-end, via and corner scales it is the more dangerous of the
+            # two, because nothing in the numbers looks wrong.
+            if not np.isfinite(scale_floor):
+                row["scale_trustworthy"] = None
+                row["scale_status"] = "uncertified"
+            elif scale >= scale_floor:
+                row["scale_trustworthy"] = True
+                row["scale_status"] = "supported"
+            else:
+                row["scale_trustworthy"] = False
+                row["scale_status"] = "below_registration_floor"
             assoc_rows.append((a, row))
 
             if n_permutations and finite.sum() >= 8:
@@ -292,7 +357,8 @@ def run(gds_path: str, failures: FailureSet, *,
                 obs_groups, block_size = observation_groups(filled)
                 pr = permutation.block_permutation_test(
                     vals, y, grid, n_permutations=n_permutations, seed=seed,
-                    mask=finite, groups=obs_groups, block_cells=block_size)
+                    mask=finite, groups=obs_groups, block_cells=block_size,
+                    strata=die_index)
                 p = pr.as_row()
                 p.update(feature=name, layer=layer_name, scale_um=scale)
                 perm_rows.append(p)
@@ -326,7 +392,11 @@ def run(gds_path: str, failures: FailureSet, *,
         "failure_footprint_audit": audit,
         "pair_selection": pair_selection if len(specs) > 1 else None,
         "with_gradients": with_gradients,
-        "die_bbox_um": [bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax],
+        "die_bbox_um": [die_bbox.xmin, die_bbox.ymin, die_bbox.xmax, die_bbox.ymax],
+        "geometry_bbox_um": [geometry_bbox.xmin, geometry_bbox.ymin,
+                             geometry_bbox.xmax, geometry_bbox.ymax],
+        "die_outline_declared": frame_note == "" or "region of interest" in frame_note,
+        "top_cell": reader.top.name,
         "scales_um": sorted(grids),
         "n_failures": len(failures),
         "n_dies": n_dies,

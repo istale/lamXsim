@@ -142,9 +142,13 @@ def cmd_run(args) -> int:
     manifest.validate_against(reader)
     bbox = manifest.die_bbox(reader)
 
+    geometry_bbox = reader.bbox()
     print(f"layout   : {args.gds}")
-    print(f"  die    : [{bbox.xmin:g}, {bbox.ymin:g}] to [{bbox.xmax:g}, {bbox.ymax:g}] um"
-          f"{'' if manifest.die_outline_um else '  (from geometry bbox, not a declared outline)'}")
+    print(f"  top cell : {reader.top.name}")
+    print(f"  geometry : [{geometry_bbox.xmin:g}, {geometry_bbox.ymin:g}] to "
+          f"[{geometry_bbox.xmax:g}, {geometry_bbox.ymax:g}] um   (what this file holds)")
+    print(f"  die      : [{bbox.xmin:g}, {bbox.ymin:g}] to [{bbox.xmax:g}, {bbox.ymax:g}] um"
+          f"   ({'declared' if manifest.die_outline_um else 'ASSUMED from geometry'})")
     print(f"  metal  : {[str(m) for m in manifest.metal_layers]}")
     print(f"  vias   : {{{', '.join(f'{k}: {v}' for k, v in manifest.via_layers.items())}}}")
     if manifest.gaps:
@@ -196,6 +200,7 @@ def cmd_run(args) -> int:
         args.gds, failures, layers=manifest.metal_layers,
         via_layers=manifest.via_layers, package_layers=manifest.package_layers,
         footprint=footprint, min_coverage=manifest.min_coverage,
+        die_bbox=bbox, top_cell=manifest.top_cell,
         scales_um=tuple(scales), n_permutations=manifest.n_permutations,
         with_gradients=manifest.with_gradients,
         pair_selection=manifest.pair_selection,
@@ -221,7 +226,11 @@ def cmd_run(args) -> int:
             print(f"\nablation skipped: scale {scale:g}um is not among the "
                   f"analysed scales {scales}")
             args.ablation = False
-        grid = build_grid(bbox, scale)
+        # The grid must be the one the features were extracted on -- the
+        # loaded geometry, not the declared die. Building it from the die
+        # outline on a region of interest indexes folds into rows that do not
+        # exist.
+        grid = build_grid(geometry_bbox, scale)
         frame = res.features[res.features.scale_um == scale].reset_index(drop=True)
         y = frame["failure_present"].to_numpy(int)
 

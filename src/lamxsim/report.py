@@ -61,8 +61,15 @@ def partition(associations: pd.DataFrame) -> dict[str, pd.DataFrame]:
     df = associations.copy()
     df["abs_effect"] = df["effect_size"].abs()
     trustworthy = df.get("scale_trustworthy")
-    ok_scale = (pd.Series(True, index=df.index) if trustworthy is None
-                else trustworthy.fillna(True).astype(bool))
+    if trustworthy is None:
+        ok_scale = pd.Series(True, index=df.index)
+    else:
+        # Strict: only an explicit True qualifies. An unknown registration
+        # accuracy leaves the scale uncertified, and an uncertified scale
+        # cannot carry a primary result -- treating unknown as good is how a
+        # 25um conclusion survives a measurement that could not place a
+        # failure to better than 100um.
+        ok_scale = trustworthy.astype("object").eq(True)
 
     is_geometry = df["evidence_class"] == "GDS_GEOMETRY"
     is_primary_tier = df["hypothesis_tier"].isin(PRIMARY_TIERS)
@@ -72,6 +79,9 @@ def partition(associations: pd.DataFrame) -> dict[str, pd.DataFrame]:
     primary = df[is_geometry & is_primary_tier & ok_scale & powered]
     confounders = df[df["hypothesis_tier"].isin(CONFOUNDER_TIERS)]
     unsupported = df[~ok_scale]
+    if "scale_status" in df.columns:
+        unsupported = unsupported.assign(
+            excluded_because=unsupported["scale_status"])
     underpowered = df[is_geometry & is_primary_tier & ok_scale & ~powered]
     exploratory = df[is_geometry & ~is_primary_tier & ok_scale & powered]
 
@@ -103,7 +113,8 @@ def partition(associations: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
 
 #: Columns a reader needs to judge a row, in the order they should be read.
-SUMMARY_COLUMNS = ("feature", "layer", "scale_um", "roc_auc", "auc_ci_low",
+SUMMARY_COLUMNS = ("feature", "layer", "scale_um", "scale_status",
+                   "roc_auc", "auc_ci_low",
                    "auc_ci_high", "effect_size", "fdr_q_value", "n_case",
                    "n_control", "effective_n", "enrichment_top_10pct")
 
@@ -136,7 +147,8 @@ def write(associations: pd.DataFrame, outdir: str | Path, *,
         f"- exploratory        {counts['exploratory']:5d}  no direct delamination "
         "evidence; effect size only, no significance claim",
         f"- unsupported_scale  {counts['unsupported_scale']:5d}  below the "
-        "registration floor; excluded from every conclusion",
+        "registration floor, or uncertified because the registration accuracy "
+        "was never measured; excluded from every conclusion",
         f"- underpowered       {counts['underpowered']:5d}  fewer than "
         f"{MIN_CLASS_SIZE} cells in one class, so the effect estimate is "
         "degenerate however large it looks",

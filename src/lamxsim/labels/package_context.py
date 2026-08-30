@@ -39,7 +39,10 @@ FEATURES = (
     "bump_count_density",
     "under_bump_indicator",
     "distance_to_nearest_pi_opening",
+    "distance_to_pi_opening_corner",
     "distance_to_crackstop",
+    "distance_to_pad_edge",
+    "under_pad_indicator",
 )
 
 
@@ -55,6 +58,44 @@ class PackageLayers:
     def any_present(self) -> bool:
         return any(v is not None for v in
                    (self.bump, self.pad, self.pi_opening, self.crackstop))
+
+
+def _edge_segments(reader: LayoutReader, spec: LayerSpec | None) -> np.ndarray:
+    """Boundary segments of a layer, as (x0, y0, x1, y1) rows in um.
+
+    Distances to a PI opening or a crackstop have to be measured to the shape,
+    not to a bounding-box centre. A crackstop is a ring around the die: its
+    bounding box is the die, so a centre-based distance to it is numerically
+    identical to distance-to-die-centre -- a feature that already exists,
+    arriving under a name that suggests crackstop proximity was measured.
+    """
+    if spec is None:
+        return np.empty((0, 4))
+    edges = reader.edges(spec)
+    dbu = reader.units.dbu
+    rows = [(e.x1 * dbu, e.y1 * dbu, e.x2 * dbu, e.y2 * dbu)
+            for e in edges.each()]
+    return np.array(rows, dtype=float).reshape(-1, 4)
+
+
+def _distance_to_segments(x: np.ndarray, y: np.ndarray, seg: np.ndarray,
+                          block: int = 2048) -> np.ndarray:
+    """Shortest distance from each point to any boundary segment."""
+    if len(seg) == 0:
+        return np.full(len(x), np.nan)
+    ax, ay, bx, by = seg[:, 0], seg[:, 1], seg[:, 2], seg[:, 3]
+    dx, dy = bx - ax, by - ay
+    length2 = dx * dx + dy * dy
+    length2 = np.where(length2 > 0, length2, 1.0)
+
+    out = np.empty(len(x))
+    for s in range(0, len(x), block):
+        e = min(s + block, len(x))
+        px = x[s:e, None] - ax[None, :]
+        py = y[s:e, None] - ay[None, :]
+        t = np.clip((px * dx[None, :] + py * dy[None, :]) / length2[None, :], 0.0, 1.0)
+        out[s:e] = np.hypot(px - t * dx[None, :], py - t * dy[None, :]).min(axis=1)
+    return out
 
 
 def _centroids(reader: LayoutReader, spec: LayerSpec | None) -> np.ndarray:
@@ -143,11 +184,36 @@ def extract(grid, die_bbox: BBox, reader: LayoutReader,
                   "bump_count_density", "under_bump_indicator"):
             out[k] = np.full(n, np.nan)
 
-    out["distance_to_nearest_pi_opening"] = _nearest_distance(
-        x, y, _centroids(reader, layers.pi_opening))
-    out["distance_to_crackstop"] = _nearest_distance(
-        x, y, _centroids(reader, layers.crackstop))
+    # Measured to the boundary of the shape. Li et al. (2023, 2025) locate the
+    # BEOL stress concentration at the PI *opening edge*, not at the centre of
+    # the opening, and a crackstop is a rail whose distance is meaningful only
+    # to the rail itself.
+    out["distance_to_nearest_pi_opening"] = _distance_to_segments(
+        x, y, _edge_segments(reader, layers.pi_opening))
+    out["distance_to_pi_opening_corner"] = _nearest_distance(
+        x, y, _corner_points(reader, layers.pi_opening))
+    out["distance_to_crackstop"] = _distance_to_segments(
+        x, y, _edge_segments(reader, layers.crackstop))
+    out["distance_to_pad_edge"] = _distance_to_segments(
+        x, y, _edge_segments(reader, layers.pad))
+    out["under_pad_indicator"] = _inside_any(
+        x, y, reader, layers.pad).astype(float)
     return out
+
+
+def _corner_points(reader: LayoutReader, spec: LayerSpec | None) -> np.ndarray:
+    """Convex corners of a layer, in um.
+
+    An opening's corners concentrate stress differently from its straight
+    edges, which is why the corner distance is kept separate from the edge
+    distance rather than folded into it.
+    """
+    if spec is None:
+        return np.empty((0, 2))
+    from ..features.corners import classify
+    convex, _ = classify(reader.region(spec))
+    d = reader.units.dbu
+    return np.array([[p.x * d, p.y * d] for p in convex], float).reshape(-1, 2)
 
 
 def _bump_pitch(bumps: np.ndarray) -> np.ndarray:
@@ -204,4 +270,7 @@ def absent_context_note(layers: PackageLayers) -> list[str]:
     if layers.crackstop is None:
         notes.append("no crackstop layer supplied: die-edge structure is not "
                      "distinguished from ordinary routing.")
+    if layers.pad is None:
+        notes.append("no pad layer supplied: pad geometry, which Rabie et al. "
+                     "(2018) list among the layout levers, is not represented.")
     return notes

@@ -80,8 +80,21 @@ def block_permutation_test(values: np.ndarray, labels: np.ndarray, grid, *,
                            block_cells: int | None = None,
                            seed: int = 0,
                            mask: np.ndarray | None = None,
-                           groups: np.ndarray | None = None) -> PermutationResult:
-    """Permute labels in contiguous square blocks and compare the statistic."""
+                           groups: np.ndarray | None = None,
+                           strata: np.ndarray | None = None) -> PermutationResult:
+    """Permute labels in contiguous square blocks and compare the statistic.
+
+    ``strata`` confines the permutation: blocks are only ever exchanged with
+    other blocks in the same stratum. With one stratum per die that keeps each
+    die's failure count fixed, which matters because dies differ in process
+    lot, inspection sensitivity and base rate -- letting a permutation move
+    failures between them builds a null in which those differences do not
+    exist, and narrows it against a real effect.
+
+    Grouping observations by ``(die, block)`` is not sufficient on its own: it
+    only decides which cells form a block, while the exchange still pairs
+    every block with every other.
+    """
     from .univariate import roc_auc
 
     if statistic is None:
@@ -111,22 +124,35 @@ def block_permutation_test(values: np.ndarray, labels: np.ndarray, grid, *,
               (np.where(ids == b)[0] for b in np.unique(ids))]
     groups = [g for g in groups if len(g)]
 
+    # Partition the blocks by stratum; a permutation only ever exchanges
+    # blocks that share one.
+    if strata is None:
+        block_strata = [list(range(len(groups)))]
+    else:
+        strata = np.asarray(strata)
+        # A block lies in one stratum by construction when the grouping
+        # already encodes it; take the first member's stratum.
+        by_stratum: dict = {}
+        for i, g in enumerate(groups):
+            by_stratum.setdefault(strata[g[0]], []).append(i)
+        block_strata = list(by_stratum.values())
+
     observed = statistic(values[keep], labels[keep])
     rng = np.random.default_rng(seed)
     null = np.empty(n_permutations)
     for k in range(n_permutations):
-        perm_order = rng.permutation(len(groups))
         shuffled = np.empty_like(labels)
-        # Move whole blocks of labels onto other blocks, truncating or
-        # recycling as needed when blocks differ in size at the die edge.
-        pool = np.concatenate([labels[groups[j]] for j in perm_order])
-        pos = 0
-        for g in groups:
-            take = pool[pos:pos + len(g)]
-            if len(take) < len(g):
-                take = np.concatenate([take, pool[:len(g) - len(take)]])
-            shuffled[g] = take
-            pos += len(g)
+        for members in block_strata:
+            order = rng.permutation(len(members))
+            pool = np.concatenate([labels[groups[members[j]]] for j in order])
+            pos = 0
+            for i in members:
+                g = groups[i]
+                take = pool[pos:pos + len(g)]
+                if len(take) < len(g):
+                    take = np.concatenate([take, pool[:len(g) - len(take)]])
+                shuffled[g] = take
+                pos += len(g)
         null[k] = statistic(values[keep], shuffled[keep])
 
     finite = null[np.isfinite(null)]

@@ -187,8 +187,10 @@ def test_missing_package_layers_are_recorded_as_uncontrolled(packaged):
     reader, grid, layers, _ = packaged
     notes = absent_context_note(PackageLayers())
     assert any("UNCONTROLLED" in n for n in notes)
-    assert len(notes) == 3
-    assert absent_context_note(layers) == []
+    assert {n.split()[1] for n in notes} == {"bump/C4", "PI-opening",
+                                             "crackstop", "pad"}
+    # The fixture supplies everything except pad, so exactly that is reported.
+    assert [n.split()[1] for n in absent_context_note(layers)] == ["pad"]
 
 
 def test_package_context_is_position_evidence_not_geometry():
