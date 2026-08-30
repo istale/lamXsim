@@ -1,0 +1,381 @@
+"""The GDS-only deliverable: a literature exposure atlas.
+
+Given a layout and a study manifest, and no failure data at all, this reports
+where the layout departs from levers the literature documents -- with the
+citation, the exact GDS observable, and the physics that would be needed to
+turn the departure into a risk.
+
+What it is:
+
+* a deterministic geometry fact (evidence level 1) for every feature map;
+* a mechanistic engineering hypothesis (level 3) for every candidate region,
+  which is a reason to look there first;
+* an input to a measurement campaign, and to the Phase 0 sample-size question.
+
+What it is not: a statistical association (level 2 needs measured failures),
+a failure probability, or a design rule. Nothing here is calibrated, so
+candidates are ranked by percentile *within this die* and by nothing else.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from . import exposure, registry
+from .features import gradient as grad_mod
+from .features.bump_relative import extract as bump_relative_extract
+from .features.crosslayer import LayerStack, extract as crosslayer_extract
+from .features.geometry import GeometryExtractor
+from .features.grid import build_multiscale
+from .features.orientation import OrientationExtractor
+from .features.structures import StructureExtractor
+from .features.vias import ViaExtractor
+from .labels import package_context, position
+from .layout.reader import LayoutReader
+
+#: A cell is a candidate on a channel when it sits at or above this percentile
+#: of the die. Chosen for review bandwidth, not calibrated against anything.
+CANDIDATE_PERCENTILE = 95.0
+
+
+@dataclass
+class Atlas:
+    features: pd.DataFrame
+    channels: dict[float, list]
+    candidates: pd.DataFrame
+    metadata: dict = field(default_factory=dict)
+
+
+def _extract_scale(reader, manifest, grid, bbox):
+    """Every feature map available at one scale, with no failure data."""
+    geo = GeometryExtractor(reader, line_rules=manifest.line_rule_map())
+    ori = OrientationExtractor(reader)
+    via = ViaExtractor(reader)
+    struct = StructureExtractor(reader, wide_width_um=manifest.wide_width_um,
+                                fill_layers=manifest.fill_layers)
+
+    per_layer, flat = {}, {}
+    for spec in manifest.metal_layers:
+        vals = dict(geo.extract(spec, grid))
+        vals.update(ori.extract(spec, grid))
+        vals.update(struct.extract(spec, grid))
+        via_spec = manifest.via_layers.get(spec.name)
+        if via_spec is not None:
+            vals.update(via.extract(via_spec, grid))
+        per_layer[spec.name] = vals
+        vals = dict(vals)
+        vals.update(grad_mod.gradient_set(
+            per_layer[spec.name], grid,
+            only=("metal_density", "perimeter_density", "corner_density",
+                  "line_end_density", "via_density")))
+        for name, v in vals.items():
+            flat[f"{name}|{spec.name}"] = v
+
+    if len(manifest.metal_layers) > 1:
+        stack = LayerStack(tuple(s.name for s in manifest.metal_layers))
+        for name, v in crosslayer_extract(per_layer, stack).items():
+            flat[f"{name}|CROSS"] = v
+
+    for name, v in position.extract(grid, bbox).items():
+        flat[f"{name}|-"] = v
+
+    if manifest.package_layers.any_present:
+        ctx = package_context.extract(grid, bbox, reader, manifest.package_layers)
+        for name, v in ctx.items():
+            flat[f"{name}|-"] = v
+        radial = ctx.get("bump_radial_direction_rad")
+        if radial is not None and np.isfinite(radial).any():
+            for spec in manifest.metal_layers:
+                base = per_layer[spec.name]
+                for name, v in bump_relative_extract(
+                        base["routing_direction_rad"],
+                        base["orientation_coherence"], radial).items():
+                    flat[f"{name}|{spec.name}"] = v
+    return flat, per_layer
+
+
+def _channel_inputs(flat: dict, layer: str) -> dict[str, np.ndarray]:
+    """Feature maps for one layer, under their bare names."""
+    out = {}
+    for key, values in flat.items():
+        name, _, owner = key.partition("|")
+        if owner in (layer, "-", "CROSS"):
+            out.setdefault(name, values)
+    return out
+
+
+def build(gds_path: str, manifest, *, candidate_percentile: float =
+          CANDIDATE_PERCENTILE) -> Atlas:
+    reader = LayoutReader(gds_path, top_cell=manifest.top_cell)
+    manifest.validate_against(reader)
+    geometry_bbox = reader.bbox()
+    die_bbox = manifest.die_bbox(reader)
+
+    grids = build_multiscale(geometry_bbox, manifest.scales_um)
+    frames, channels, candidate_rows = [], {}, []
+
+    for scale, grid in sorted(grids.items()):
+        flat, _ = _extract_scale(reader, manifest, grid, die_bbox)
+        frame = pd.DataFrame(grid.to_arrays())
+        frame = pd.concat([frame, pd.DataFrame(flat, index=frame.index)], axis=1)
+        frames.append(frame)
+
+        scale_channels = []
+        # Die-scoped channels once, layer-scoped channels per layer. Reporting
+        # a shared package or cross-layer feature under every metal layer
+        # would present one candidate as several and read as corroboration.
+        scored = [("-", c, _channel_inputs(flat, "-"))
+                  for c in exposure.CHANNELS if c.scope == "die"]
+        scored += [(spec.name, c, _channel_inputs(flat, spec.name))
+                   for spec in manifest.metal_layers
+                   for c in exposure.CHANNELS if c.scope == "layer"]
+
+        for owner, channel, inputs in scored:
+            for result in [exposure.evaluate(channel, inputs, len(grid))]:
+                spec = type("S", (), {"name": owner})
+                scale_channels.append((owner, result))
+                if not result.available:
+                    continue
+                pct = result.percentile
+                flagged = np.where(np.isfinite(pct)
+                                   & (pct >= candidate_percentile))[0]
+                for i in flagged:
+                    cell = grid.cells[i]
+                    candidate_rows.append({
+                        "channel": result.channel.channel_id,
+                        "layer": owner,
+                        "scale_um": scale,
+                        "x_um": cell.x_center, "y_um": cell.y_center,
+                        "percentile_in_die": round(float(pct[i]), 2),
+                        "inputs_used": ";".join(result.inputs_used),
+                        "references": ";".join(result.channel.references),
+                        "mechanism": result.channel.mechanism,
+                        "two_sided": result.channel.two_sided,
+                        "unsupported_physics":
+                            ";".join(result.channel.unsupported_physics),
+                    })
+        channels[scale] = scale_channels
+
+    candidates = pd.DataFrame(candidate_rows)
+    if not candidates.empty:
+        candidates = candidates.sort_values(
+            ["channel", "scale_um", "percentile_in_die"],
+            ascending=[True, True, False])
+
+    metadata = {
+        "gds_path": str(gds_path),
+        "top_cell": reader.top.name,
+        "geometry_bbox_um": [geometry_bbox.xmin, geometry_bbox.ymin,
+                             geometry_bbox.xmax, geometry_bbox.ymax],
+        "die_bbox_um": [die_bbox.xmin, die_bbox.ymin,
+                        die_bbox.xmax, die_bbox.ymax],
+        "die_outline_declared": bool(manifest.die_outline_um),
+        "scales_um": sorted(grids),
+        "candidate_percentile": candidate_percentile,
+        "manifest": manifest.report(),
+        "evidence_level": (
+            "1 for the feature maps (deterministic geometry, checkable against "
+            "KLayout or Calibre); 3 for the candidates (a mechanistic "
+            "engineering hypothesis with a citation). Not level 2: no measured "
+            "failure was involved, so nothing here is a statistical "
+            "association, a probability, or a design rule."),
+    }
+    return Atlas(features=pd.concat(frames, ignore_index=True),
+                 channels=channels, candidates=candidates, metadata=metadata)
+
+
+def _overlay_gds(atlas: Atlas, path: Path, manifest, *,
+                 base_layer: int = 200) -> dict:
+    """One marker layer per channel, never a combined hotspot layer.
+
+    A single merged layer is what a downstream reader opens and treats as the
+    answer. Keeping the channels apart in the file keeps the citation attached
+    to the mark, and makes it impossible to read a location flagged on three
+    mechanisms as three times worse than one flagged on one.
+    """
+    from .layout.synth import SynthLayout
+
+    if atlas.candidates.empty:
+        return {}
+    sl = SynthLayout(top_name="EXPOSURE")
+    mapping = {}
+    for i, channel in enumerate(sorted(atlas.candidates.channel.unique())):
+        layer_no = base_layer + i
+        mapping[channel] = layer_no
+        rows = atlas.candidates[atlas.candidates.channel == channel]
+        for _, r in rows.iterrows():
+            half = r.scale_um / 2
+            sl.add_box(layer_no, r.x_um - half, r.y_um - half,
+                       r.x_um + half, r.y_um + half)
+    sl.write(str(path))
+    return mapping
+
+
+def _traceability(atlas: Atlas) -> pd.DataFrame:
+    """Every channel, and every feature it read, against the registry."""
+    rows = []
+    for channel in exposure.CHANNELS:
+        for feature in channel.inputs:
+            entry = registry.lookup(feature)
+            rows.append({
+                "channel": channel.channel_id,
+                "mechanism": channel.mechanism,
+                "references": ";".join(channel.references),
+                "gds_observable": channel.observable,
+                "feature": feature,
+                "registry_family": entry.family if entry else "",
+                "registry_complete": bool(entry and not entry.missing_trace),
+                "physical_hypothesis": (entry.row.get("physical_hypothesis", "")
+                                        if entry else ""),
+                "discrimination_test": (entry.row.get("discrimination_test", "")
+                                        if entry else ""),
+                "falsification": (entry.row.get("falsification", "")
+                                  if entry else ""),
+                "two_sided": channel.two_sided,
+                "requires": ";".join(channel.requires),
+            })
+    return pd.DataFrame(rows)
+
+
+def _unsupported_physics(atlas: Atlas) -> pd.DataFrame:
+    """Per channel, what a GDS cannot supply and what it would change."""
+    rows = []
+    for channel in exposure.CHANNELS:
+        for quantity in channel.unsupported_physics:
+            rows.append({
+                "channel": channel.channel_id,
+                "quantity": quantity,
+                "why_it_matters": channel.mechanism,
+                "recoverable_from_gds": False,
+                "consequence": (
+                    "the channel reports where the layout is unusual, not "
+                    "where it is at risk; without this quantity the departure "
+                    "cannot be converted into a driving force"),
+            })
+    return pd.DataFrame(rows)
+
+
+def _limits_document(atlas: Atlas, manifest, overlay: dict) -> str:
+    n = len(atlas.candidates)
+    channels = (atlas.candidates.channel.value_counts().to_dict()
+                if n else {})
+    unavailable = []
+    for scale_channels in atlas.channels.values():
+        for layer, result in scale_channels:
+            if not result.available:
+                unavailable.append(
+                    f"- `{result.channel.channel_id}` on {layer}: {result.reason}")
+    lines = [
+        "# What this atlas is, and what it is not",
+        "",
+        "## What it is",
+        "",
+        "Every feature map is a **deterministic geometry fact** -- checkable "
+        "against KLayout or Calibre, independent of any failure data.",
+        "",
+        f"Every one of the {n} candidate records is a **mechanistic "
+        "engineering hypothesis**: a location where this layout departs from a "
+        "lever the literature documents, with the citation attached. It is a "
+        "reason to look there first.",
+        "",
+        "## What it is not",
+        "",
+        "- Not a statistical association. No measured failure was involved.",
+        "- Not a probability. Nothing here is calibrated, so candidates are "
+        "ranked by percentile **within this die** and by nothing else. The "
+        "same layout on another package or process would rank the same and "
+        "mean something different.",
+        "- Not a design rule. That needs held-out hardware.",
+        "- Not a combined risk score. Channels are reported separately "
+        "because combining them requires weights, and the weights could only "
+        "come from data this study does not have. A location flagged on three "
+        "channels is three records with three citations, not a score of three.",
+        "",
+        "## Channels reported",
+        "",
+    ]
+    for channel in exposure.CHANNELS:
+        count = channels.get(channel.channel_id, 0)
+        lines.append(f"**{channel.channel_id}** -- {count} candidate(s), "
+                     f"{'two-sided' if channel.two_sided else 'one-sided'}")
+        lines.append(f"  - mechanism: {channel.mechanism}")
+        lines.append(f"  - references: {', '.join(channel.references)}")
+        lines.append(f"  - observable: {channel.observable}")
+        if channel.note:
+            lines.append(f"  - note: {channel.note}")
+        lines.append("")
+
+    if unavailable:
+        lines += ["## Channels that could not be scored", ""]
+        lines += sorted(set(unavailable))
+        lines.append("")
+
+    gaps = manifest.gaps
+    if gaps:
+        lines += ["## Declared gaps in the manifest", ""]
+        lines += [f"- {g}" for g in gaps]
+        lines.append("")
+
+    if overlay:
+        lines += ["## GDS overlay layers", ""]
+        lines += [f"- layer {no}: `{ch}`" for ch, no in sorted(overlay.items(),
+                                                               key=lambda kv: kv[1])]
+        lines.append("")
+        lines.append("There is deliberately no combined hotspot layer.")
+        lines.append("")
+
+    lines += [
+        "## What would turn this into evidence",
+        "",
+        "Measured failure locations in the same coordinate frame, with "
+        "lot/wafer/die identity, a registration fiducial set, an inspected "
+        "footprint, and the failed layer or interface. `unsupported_physics.csv` "
+        "lists the package and material quantities that no GDS contains and "
+        "that a study must hold fixed, stratify, or measure.",
+        "",
+        "Run `lamxsim phase0` for how many failure sites the association "
+        "analysis would need before it could say anything at all.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def write(atlas: Atlas, outdir: str | Path, manifest) -> dict[str, str]:
+    out = Path(outdir)
+    out.mkdir(parents=True, exist_ok=True)
+    paths = {}
+
+    p = out / "feature_maps.parquet"
+    atlas.features.to_parquet(p, index=False)
+    paths["feature_maps"] = str(p)
+
+    p = out / "literature_candidates.csv"
+    atlas.candidates.to_csv(p, index=False)
+    paths["literature_candidates"] = str(p)
+
+    p = out / "literature_traceability.csv"
+    _traceability(atlas).to_csv(p, index=False)
+    paths["literature_traceability"] = str(p)
+
+    p = out / "unsupported_physics.csv"
+    _unsupported_physics(atlas).to_csv(p, index=False)
+    paths["unsupported_physics"] = str(p)
+
+    overlay = {}
+    if not atlas.candidates.empty:
+        p = out / "candidate_regions.gds"
+        overlay = _overlay_gds(atlas, p, manifest)
+        paths["candidate_regions"] = str(p)
+    atlas.metadata["overlay_layers"] = overlay
+
+    p = out / "assumptions_and_limits.md"
+    p.write_text(_limits_document(atlas, manifest, overlay))
+    paths["assumptions_and_limits"] = str(p)
+
+    p = out / "atlas_metadata.json"
+    p.write_text(json.dumps(atlas.metadata, indent=2, default=str))
+    paths["metadata"] = str(p)
+    return paths

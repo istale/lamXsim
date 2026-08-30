@@ -1,0 +1,18 @@
+# Frozen input for the golden-run regression. Do not edit without
+# regenerating tests/golden/golden_candidates.csv and saying why in the commit.
+layout:
+  metal_layers:
+    - {name: M8, layer: 8, datatype: 0}
+    - {name: M7, layer: 7, datatype: 0}
+  via_layers:
+    M8: {name: V7, layer: 17, datatype: 0}
+  package_layers:
+    bump: {name: BUMP, layer: 60, datatype: 0}
+    pi_opening: {name: PI, layer: 61, datatype: 0}
+    crackstop: {name: CS, layer: 62, datatype: 0}
+  line_rules:
+    M8: {min_width_um: 0.2, line_max_width_um: 2.0}
+    M7: {min_width_um: 0.1, line_max_width_um: 1.0}
+  die_outline_um: [0, 0, 1500, 1500]
+analysis:
+  scales_um: [100, 250]

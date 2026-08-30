@@ -75,6 +75,22 @@ The bibliographic inventory and evidence tiers live in
 [`references/core_references.csv`](../references/core_references.csv) and
 [`references/feature_evidence_map.csv`](../references/feature_evidence_map.csv).
 
+## The GDS-only deliverable
+
+Before any failure data exists, `lamxsim characterize` produces a literature
+exposure atlas: seven channels, one per documented mechanism, each scoring
+where this layout departs from the lever its paper describes. Every candidate
+carries the citation, the exact GDS observable, and the package or material
+quantities that would be needed to turn the departure into a driving force.
+
+It sits at levels 1 and 3 of the four below -- deterministic geometry, and a
+mechanistic hypothesis worth a cross-section -- and deliberately not at level
+2, which requires measured failure, or level 4.
+
+Channels are never summed. Combining them requires weights, the weights could
+only come from the data this stage does not have, and the result would be the
+arbitrary weighted probability spec section 1 forbids.
+
 ## What is a fact, an association and a hypothesis?
 
 Every result should be read at one of four levels:

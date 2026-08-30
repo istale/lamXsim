@@ -150,6 +150,59 @@ def cmd_thinslice(args) -> int:
     return 0
 
 
+def cmd_characterize(args) -> int:
+    """GDS + manifest -> literature exposure atlas. No failure data involved."""
+    from . import atlas as atlas_mod
+
+    manifest = StudyManifest.load(args.manifest)
+    manifest.sample_conditions.validate()
+    result = atlas_mod.build(args.gds, manifest,
+                             candidate_percentile=args.candidate_percentile)
+    meta = result.metadata
+
+    print(f"layout   : {args.gds}")
+    print(f"  top cell : {meta['top_cell']}")
+    print(f"  geometry : {meta['geometry_bbox_um']} um")
+    print(f"  die      : {meta['die_bbox_um']} um"
+          f"   ({'declared' if meta['die_outline_declared'] else 'ASSUMED from geometry'})")
+    print(f"  scales   : {meta['scales_um']} um")
+    print(f"  features : {sum(1 for c in result.features.columns if '|' in c)} maps")
+
+    if manifest.gaps:
+        print("\ndeclared gaps in the manifest:")
+        for g in manifest.gaps:
+            print(f"  - {g}")
+
+    unavailable = sorted({f"{r.channel.channel_id}: {r.reason}"
+                          for cs in result.channels.values()
+                          for _, r in cs if not r.available})
+    if unavailable:
+        print("\nchannels that could not be scored:")
+        for u in unavailable:
+            print(f"  - {u}")
+
+    print(f"\n=== literature exposure, top {100 - args.candidate_percentile:g}% "
+          "of this die per channel ===")
+    if result.candidates.empty:
+        print("  no candidate regions")
+    else:
+        summary = (result.candidates.groupby(["channel", "layer", "scale_um"])
+                   .size().rename("n_candidates").reset_index())
+        print(summary.to_string(index=False))
+        print("\nchannels are reported separately and never summed: a location "
+              "flagged on three is three records with three citations, not a "
+              "score of three.")
+
+    paths = atlas_mod.write(result, args.outdir, manifest)
+    print("\nwritten:")
+    for k, v in paths.items():
+        print(f"  {k:26s} {v}")
+    print("\nRead assumptions_and_limits.md first. Nothing here is a "
+          "probability: with no measured failure there is no scale on which "
+          "one could be defined.")
+    return 0
+
+
 def cmd_run(args) -> int:
     """The real-data workflow: manifest -> registration -> gated analysis.
 
@@ -530,6 +583,17 @@ def main(argv=None) -> int:
                     default=[25, 50, 100, 250])
     ts.add_argument("--n-permutations", type=int, default=299)
     ts.set_defaults(func=cmd_thinslice)
+
+    ch = sub.add_parser(
+        "characterize",
+        help="GDS + manifest -> literature exposure atlas, no failure data")
+    ch.add_argument("gds")
+    ch.add_argument("--manifest", default="config/study_manifest.yaml")
+    ch.add_argument("--outdir", default="results/atlas")
+    ch.add_argument("--candidate-percentile", type=float, default=95.0,
+                    help="a cell is a candidate on a channel at or above this "
+                         "percentile of the die (default 95, i.e. the top 5%%)")
+    ch.set_defaults(func=cmd_characterize)
 
     p6 = sub.add_parser("phase6", help="baseline, spatial CV and ablation")
     p6.add_argument("--outdir", default="results")

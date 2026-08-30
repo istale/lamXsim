@@ -1,7 +1,9 @@
 # lamXsim — GDS Spatial Delamination Correlation Engine
 
 **Status: a GDS-first, literature-grounded tool for generating and testing
-failure hypotheses.** Not a physics solver, and not a reliability workflow that
+failure hypotheses.** With a layout and a layer map alone it produces a
+literature exposure atlas; with measured failures it becomes a correlation
+engine. Not a physics solver, and not a reliability workflow that
 can be signed off unattended.
 
 The real-data path is complete end to end: a study manifest declares the layer
@@ -35,6 +37,54 @@ discovering the analysis cannot be performed with the data available. This
 build inverts it: the statistical machinery is finished and validated first,
 on a synthetic die whose ground truth is known, so that broadening the feature
 catalogue is a mechanical extension of something already proven to work.
+
+## With a layout and a layer map, and nothing else
+
+Most of this repository is about correlating geometry with measured failure.
+Before any failure data exists, the same extraction answers a different and
+still useful question: **where does this layout depart from a lever the
+literature documents?**
+
+```bash
+PYTHONPATH=src python3 -m lamxsim characterize chip.gds \
+  --manifest layers.yaml --outdir results/atlas
+```
+
+Seven channels, one per mechanism, each with its citation:
+
+| channel | mechanism | reference |
+|---|---|---|
+| `perimeter_at_matched_density` | Cu/low-k boundary beyond what the density implies | Yoo 2004 |
+| `termination` | tips and re-entrant corners rather than comb lines | Tan 2008 |
+| `via_architecture` | via density, two-sided | Vanstreels 2020, Zahedmanesh 2019 |
+| `layout_transition` | abrupt change in metallisation | Rabie 2018 |
+| `cross_layer_mismatch` | top-to-underlying architecture, two-sided | Vanstreels 2020 |
+| `routing_in_bump_frame` | routing not diagonal under corner bumps | Rabie 2018 |
+| `pi_opening_proximity` | stress concentration at the PI opening | Rabie 2018, Li 2023/2025 |
+
+Outputs: `feature_maps.parquet`, `literature_candidates.csv`,
+`candidate_regions.gds`, `literature_traceability.csv`,
+`unsupported_physics.csv`, `assumptions_and_limits.md`.
+
+**Three rules keep this from becoming a risk score.** Spec section 1 forbids
+an arbitrary weighted delamination probability, and a weighted sum of these
+channels is exactly that under another name — the weights could only come from
+data this study does not have.
+
+- Channels are never combined. A location flagged on three is three records
+  with three citations, not a score of three, and the GDS overlay has one
+  layer per channel with no merged hotspot layer.
+- Ranking is a percentile **within this die**. Nothing is calibrated, so the
+  same layout on another package would rank identically and mean something
+  different.
+- Two-sidedness comes from the physics. Zahedmanesh & Vanstreels show a stiff
+  top group *lowering* the driving force beneath it, so flagging only the high
+  end of via architecture would invent a direction the literature denies.
+
+The atlas is a **deterministic geometry fact** for every map and a
+**mechanistic engineering hypothesis** for every candidate — a reason to look
+somewhere first. It is not a statistical association, which needs measured
+failures, and `unsupported_physics.csv` lists per channel what no GDS contains.
 
 ## Quick start
 
