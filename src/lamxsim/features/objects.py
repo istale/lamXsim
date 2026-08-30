@@ -294,14 +294,43 @@ def describe(poly, *, object_id: str, kind: str, source_layer: str,
         })
 
 
+def region_for(reader: LayoutReader, spec: LayerSpec, polarity: str):
+    """The objects on a layer, whichever way round the layer draws them.
+
+    ``positive`` means the polygon is the object. ``opening`` means the
+    polygon is the film and the objects are the holes in it, so the objects
+    are the holes -- extracted here rather than assumed away.
+
+    This is the difference between measuring a 40x40 um opening and measuring
+    the 200x200 um film around it. Declaring the polarity and then describing
+    the drawn polygon either way gives the same wrong answer with a correct
+    label on it, which is worse than no label: every PI area, diameter, aspect
+    ratio, orientation and pad match would be computed on the film.
+    """
+    region = reader.region(spec)
+    if polarity != "opening":
+        return region
+    holes = db.Region()
+    for poly in region.each():
+        for i in range(poly.holes()):
+            holes.insert(db.Polygon(list(poly.each_point_hole(i))))
+    if holes.is_empty():
+        # A layer declared as openings whose polygons carry no holes is
+        # already drawn as the openings themselves -- the common case, and the
+        # one the golden and synthetic dies use. Nothing to invert.
+        return region
+    holes.merge()
+    return holes
+
+
 def objects_for(reader: LayoutReader, spec: LayerSpec | None, *, kind: str,
                 polarity: str, die_bbox: BBox | None) -> list[ShapeObject]:
-    """Describe every merged polygon on one layer."""
+    """Describe every object on one layer, honouring the declared polarity."""
     if spec is None:
         return []
     dbu = reader.units.dbu
     out = []
-    for i, poly in enumerate(reader.region(spec).each()):
+    for i, poly in enumerate(region_for(reader, spec, polarity).each()):
         out.append(describe(poly, object_id=f"{kind}:{i}", kind=kind,
                             source_layer=str(spec), polarity=polarity,
                             dbu=dbu, die_bbox=die_bbox))
@@ -342,27 +371,42 @@ def _radial_frame(x, y, die_bbox: BBox | None):
 def match(primaries: list[ShapeObject], secondaries: list[ShapeObject],
           *, rule: str, die_bbox: BBox | None,
           tolerance_um: float | None = None,
-          regions: "tuple[db.Region, db.Region] | None" = None,
+          polygons: "tuple[list, list] | None" = None,
           dbu: float = 0.001) -> list[ObjectMatch]:
     """Attach each primary to at most one secondary, and record the doubt.
 
     An unmatched primary produces no row rather than a row full of zeros: a
     pad with no bump over it is not a pad with a perfectly concentric bump.
-    Ambiguity is recorded on the row, not resolved silently -- two candidates
-    within the tolerance is a fact about the layout or about the declared
-    rule, and the run should be able to say how often it happened.
+
+    ``one_to_one`` means it. A pair that is not mutually nearest is not a
+    one-to-one match, so it is dropped rather than emitted with a note
+    attached -- two pads both pointing at ``bump:0``, each row naming the
+    one-to-one rule, is the rule being reported and not applied.
+
+    ``containment`` is polygon containment. Judging it by a circle of equal
+    area, as this did, mismatches every non-compact shape: a 200x10 um bar pad
+    and a 40x40 um square have the same equivalent radius and contain
+    completely different sets of points.
     """
     if rule not in MATCH_RULES:
         raise ValueError(f"unknown object matching rule {rule!r}; "
                          f"declare one of {list(MATCH_RULES)} in the manifest")
     if not primaries or not secondaries:
         return []
+    if rule == "containment" and polygons is None:
+        raise ValueError(
+            "the containment rule needs the polygons themselves, and only "
+            "centroids were passed. Containment judged from a centroid and an "
+            "equivalent radius is a different rule wearing this one's name.")
 
     sx = np.array([s.x_um for s in secondaries])
     sy = np.array([s.y_um for s in secondaries])
-    tol = tolerance_um
+    px = np.array([p.x_um for p in primaries])
+    py = np.array([p.y_um for p in primaries])
+    primary_polys, secondary_polys = polygons if polygons else (None, None)
+
     out = []
-    for p in primaries:
+    for index, p in enumerate(primaries):
         d = np.hypot(sx - p.x_um, sy - p.y_um)
         order = np.argsort(d)
         best = int(order[0])
@@ -370,7 +414,8 @@ def match(primaries: list[ShapeObject], secondaries: list[ShapeObject],
 
         if rule == "containment":
             inside = [i for i in range(len(secondaries))
-                      if _contains(p, secondaries[i])]
+                      if _point_in_polygon(sx[i], sy[i], primary_polys[index],
+                                           dbu)]
             if not inside:
                 continue
             if len(inside) > 1:
@@ -379,36 +424,35 @@ def match(primaries: list[ShapeObject], secondaries: list[ShapeObject],
                 inside.sort(key=lambda i: d[i])
             best = inside[0]
         elif rule == "nearest":
-            if tol is not None and d[best] > tol:
+            if tolerance_um is not None and d[best] > tolerance_um:
                 continue
             if len(d) > 1 and abs(d[order[1]] - d[best]) < max(1e-9, 0.01 * d[best]):
                 ambiguity = ("two secondaries are equidistant to within 1%; "
                              "the match is arbitrary between them")
         else:  # one_to_one
-            if tol is not None and d[best] > tol:
+            if tolerance_um is not None and d[best] > tolerance_um:
                 continue
-            back = np.hypot(np.array([q.x_um for q in primaries]) - sx[best],
-                            np.array([q.y_um for q in primaries]) - sy[best])
-            if primaries[int(np.argmin(back))].object_id != p.object_id:
-                ambiguity = ("not a mutual nearest pair, so the one-to-one "
-                             "rule does not hold here")
+            back = np.hypot(px - sx[best], py - sy[best])
+            if int(np.argmin(back)) != index:
+                continue
 
-        s = secondaries[best]
+        s_obj = secondaries[best]
         frame = _radial_frame(p.x_um, p.y_um, die_bbox)
-        dx, dy = s.x_um - p.x_um, s.y_um - p.y_um
+        dx, dy = s_obj.x_um - p.x_um, s_obj.y_um - p.y_um
         radial = tangential = float("nan")
         if frame is not None:
             ux, uy = frame
             radial, tangential = dx * ux + dy * uy, -dx * uy + dy * ux
 
         overlap = float("nan")
-        if regions is not None:
-            overlap = _overlap_fraction(p, s, regions, dbu)
+        if primary_polys is not None and secondary_polys is not None:
+            overlap = _overlap_fraction(primary_polys[index],
+                                        secondary_polys[best], dbu)
 
         # Quantised to the database unit: below it there is no geometry, only
         # the arithmetic of computing a centroid from snapped vertices.
         out.append(ObjectMatch(
-            primary_id=p.object_id, secondary_id=s.object_id, rule=rule,
+            primary_id=p.object_id, secondary_id=s_obj.object_id, rule=rule,
             centroid_offset_um=_quantise(float(math.hypot(dx, dy)), dbu),
             radial_offset_um=_quantise(float(radial), dbu),
             tangential_offset_um=_quantise(float(tangential), dbu),
@@ -416,30 +460,21 @@ def match(primaries: list[ShapeObject], secondaries: list[ShapeObject],
     return out
 
 
-def _contains(primary: ShapeObject, secondary: ShapeObject) -> bool:
-    """Centroid containment, judged by the equivalent radius.
+def _point_in_polygon(x_um: float, y_um: float, poly, dbu: float) -> bool:
+    """Is this point inside the drawn polygon, holes included?"""
+    return poly.inside(db.Point(int(round(x_um / dbu)), int(round(y_um / dbu))))
 
-    A cheap test on purpose: the exact one needs the polygons, and the
-    containment rule exists for a pad/bump/PI stack where the objects are
-    concentric by construction. Where that is not true the manifest should
-    declare `nearest` or `one_to_one` instead.
+
+def _overlap_fraction(primary_poly, secondary_poly, dbu: float) -> float:
+    """area(this primary AND this secondary) / area(this primary).
+
+    On the two polygons themselves. Clipping the whole layer to a box around
+    the primary instead lets a neighbouring pad in a dense array into the
+    denominator, so a perfectly covered pad reports less than full overlap for
+    a reason that has nothing to do with it.
     """
-    r = primary.equivalent_diameter_um / 2
-    return math.hypot(secondary.x_um - primary.x_um,
-                      secondary.y_um - primary.y_um) <= r
-
-
-def _overlap_fraction(primary: ShapeObject, secondary: ShapeObject,
-                      regions, dbu: float) -> float:
-    """area(primary AND secondary) / area(primary), on the drawn shapes."""
-    primary_region, secondary_region = regions
-    box = db.Box(int((primary.x_um - primary.feret_max_um) / dbu),
-                 int((primary.y_um - primary.feret_max_um) / dbu),
-                 int((primary.x_um + primary.feret_max_um) / dbu),
-                 int((primary.y_um + primary.feret_max_um) / dbu))
-    clip = db.Region(box)
-    a = primary_region & clip
-    b = secondary_region & clip
+    a = db.Region(primary_poly)
+    b = db.Region(secondary_poly)
     area_a = a.area() * dbu * dbu
     if area_a <= 0:
         return float("nan")
@@ -541,10 +576,18 @@ def crackstop_structure(reader: LayoutReader, spec: LayerSpec | None,
                         die_bbox: BBox | None) -> CrackstopStructure | None:
     """Measure the drawn seal-ring structure.
 
-    Widths come from a local width probe along the ring: the polygon is
-    scanned with the same opening the wide-metal measure uses, at a ladder of
-    widths, and each rail's width is the largest opening it survives. That is
-    a drawn width -- what the mask says, not what came out of the line.
+    Two concentric rails and one cut ring both give two polygons, and they are
+    opposite things: the first is the recommended structure, the second is the
+    defect. Counting components alone reported a healthy double rail as one
+    gap and a continuity of 0.53. They are told apart by whether each
+    component closes on itself -- a closed ring encloses the die centre and
+    has a hole; an arc does not.
+
+    Widths come from a local width probe: each rail is opened at a ladder of
+    sizes and its width is the largest opening it survives *everywhere*, so it
+    is the narrowest place on the rail that decides. That is the right summary
+    for a structure whose job is to be continuous, and it is a drawn width --
+    what the mask says, not what came out of the line.
     """
     if spec is None:
         return None
@@ -555,72 +598,134 @@ def crackstop_structure(reader: LayoutReader, spec: LayerSpec | None,
     polygons = list(region.each())
     n_components = len(polygons)
 
-    # A closed ring is one polygon with one hole. Two concentric rings drawn
-    # as separate shapes are two polygons; drawn as one shape with two holes
-    # they are one. Counting holes covers both.
-    n_rails = sum(max(p.holes(), 1) for p in polygons)
+    # A closed ring is one polygon with at least one hole; two concentric
+    # rings may be drawn as two such polygons or as one with two holes.
+    closed = [p for p in polygons if p.holes() > 0]
+    arcs = [p for p in polygons if p.holes() == 0]
+    n_rails = sum(max(p.holes(), 1) for p in closed)
 
     widths = []
     for poly in polygons:
         single = db.Region()
         single.insert(poly)
-        widths.append(_largest_surviving_opening(single, u))
+        widths.append(_narrowest_width(single, u))
     widths = np.array([w for w in widths if w > 0], dtype=float)
+
+    lengths = np.array([abs(p.perimeter()) * u.dbu for p in polygons])
+    if closed:
+        # Continuity is about the closed part of the ring. Arcs are what is
+        # left over when the ring is cut, so they belong in the denominator
+        # and not in the numerator.
+        continuity = float(sum(abs(p.perimeter()) * u.dbu for p in closed)
+                           / lengths.sum()) if lengths.sum() else float("nan")
+        n_gaps = len(arcs)
+    else:
+        # No closed component at all: the ring is entirely in pieces, and the
+        # number of gaps is the number of pieces.
+        continuity = (float(lengths.max() / lengths.sum())
+                      if lengths.sum() else float("nan"))
+        n_gaps = len(arcs)
+
     if len(widths) == 0:
         return CrackstopStructure(
             n_rails=n_rails, rail_width_min_um=float("nan"),
             rail_width_median_um=float("nan"), rail_width_p10_um=float("nan"),
             rail_spacing_um=float("nan"), n_components=n_components,
-            continuity_ratio=float("nan"), n_gaps=0,
+            continuity_ratio=continuity, n_gaps=n_gaps,
             undefined_reason="no rail survived any opening; the layer may not "
                              "hold a seal ring")
 
-    lengths = np.array([abs(p.perimeter()) * u.dbu for p in polygons])
-    continuity = float(lengths.max() / lengths.sum()) if lengths.sum() else float("nan")
-
     spacing = float("nan")
-    if n_components >= 2 and die_bbox is not None:
-        centres = np.array([[(p.bbox().left + p.bbox().right) / 2 * u.dbu,
-                             (p.bbox().bottom + p.bbox().top) / 2 * u.dbu]
-                            for p in polygons])
-        half = np.array([[(p.bbox().right - p.bbox().left) / 2 * u.dbu,
-                          (p.bbox().top - p.bbox().bottom) / 2 * u.dbu]
-                         for p in polygons])
-        extent = half.max(axis=1)
+    if len(closed) >= 2:
+        extent = np.array([max(p.bbox().width(), p.bbox().height()) / 2 * u.dbu
+                           for p in closed])
         order = np.argsort(-extent)
-        spacing = float(extent[order[0]] - extent[order[1]]
-                        - widths.max() if len(order) > 1 else float("nan"))
+        spacing = float(extent[order[0]] - extent[order[1]] - widths.max())
 
     return CrackstopStructure(
         n_rails=n_rails, rail_width_min_um=float(widths.min()),
         rail_width_median_um=float(np.median(widths)),
         rail_width_p10_um=float(np.percentile(widths, 10)),
         rail_spacing_um=spacing, n_components=n_components,
-        continuity_ratio=continuity,
-        # A ring drawn as one closed polygon is continuous. More components
-        # than rails means the ring is cut somewhere, which is a segmentation
-        # the lever is about.
-        n_gaps=max(n_components - 1, 0))
+        continuity_ratio=continuity, n_gaps=n_gaps)
 
 
-def _largest_surviving_opening(region, units, *, steps: int = 24) -> float:
-    """The widest morphological opening the shape survives, in um.
+def corner_topology(reader: LayoutReader, spec: LayerSpec | None,
+                    die_bbox: BBox | None, *, window_um: float = 100.0
+                    ) -> dict:
+    """The seal ring at each die corner, which is where Rabie's lever is.
 
-    A rail of width w vanishes under an opening at w, so a bisection on the
-    opening size recovers the drawn width without walking edges. It is the
-    *narrowest* place on the rail that decides, which is the right summary for
-    a structure whose job is to be continuous.
+    A ring measured as a whole says nothing about its corners, and the corner
+    is where the package load turns. Per corner: how many rails pass through
+    the window, how narrow the narrowest gets there, and how many separate
+    pieces there are -- a corner that is bridged differently from the sides is
+    exactly the topology the lever is about.
+    """
+    if spec is None or die_bbox is None:
+        return {}
+    region = reader.region(spec)
+    if region.is_empty():
+        return {}
+    u = reader.units
+    out = {}
+    corners = {"ll": (die_bbox.xmin, die_bbox.ymin),
+               "lr": (die_bbox.xmax, die_bbox.ymin),
+               "ul": (die_bbox.xmin, die_bbox.ymax),
+               "ur": (die_bbox.xmax, die_bbox.ymax)}
+    for name, (cx, cy) in corners.items():
+        box = db.Box(u.um_to_dbu(cx - window_um), u.um_to_dbu(cy - window_um),
+                     u.um_to_dbu(cx + window_um), u.um_to_dbu(cy + window_um))
+        local = region & db.Region(box)
+        out[name] = {
+            "n_pieces": local.count(),
+            "narrowest_um": _narrowest_width(local, u) if not local.is_empty()
+            else float("nan"),
+            "metal_area_um2": local.area() * u.dbu * u.dbu,
+        }
+    narrowest = [v["narrowest_um"] for v in out.values()
+                 if np.isfinite(v["narrowest_um"])]
+    pieces = [v["n_pieces"] for v in out.values()]
+    return {
+        "per_corner": out,
+        "corner_narrowest_um": float(min(narrowest)) if narrowest else float("nan"),
+        "corner_piece_count_max": int(max(pieces)) if pieces else 0,
+        # A corner drawn differently from the others is the thing worth
+        # noticing; identical corners are the ordinary case.
+        "corner_asymmetry": (float(max(narrowest) - min(narrowest))
+                             if len(narrowest) > 1 else float("nan")),
+    }
+
+
+def _narrowest_width(region, units, *, steps: int = 26) -> float:
+    """The narrowest local width anywhere in the shape, in um.
+
+    Bisected on a width check rather than on a morphological opening. Two
+    earlier versions of this measured the wrong thing:
+
+    * accepting an opening if *any* part survived returns the widest place on
+      the rail, which is the opposite summary for a structure whose job is to
+      be continuous;
+    * accepting it if 99 % of the area survived misses a pinch, because a
+      10 um neck on a 1400 um ring is a fraction of a percent of its area --
+      an 8 um ring pinched to 3 um still reported 8 um.
+
+    A width check answers the question directly: the narrowest width is the
+    largest threshold at which nothing is flagged. The projected metric is
+    used because measured corner to corner every re-entrant corner is two
+    edges a vanishing distance apart, so a Euclidian check flags every corner
+    of every ring.
     """
     box = region.bbox()
-    hi = max(box.width(), box.height()) / 2.0
-    lo = 0.0
+    if region.is_empty():
+        return 0.0
+    lo, hi = 0.0, float(max(box.width(), box.height()))
     for _ in range(steps):
         mid = (lo + hi) / 2
-        h = max(int(mid / 2), 1)
-        if region.sized(-h).sized(h).is_empty():
+        w = max(int(mid), 1)
+        if region.width_check(w, False, db.Region.Projection).count():
             hi = mid
         else:
             lo = mid
-        if hi - lo < 1.0:            # one dbu
+        if hi - lo < 1.0:
             break
     return lo * units.dbu

@@ -452,53 +452,72 @@ def _traceability(atlas: Atlas) -> pd.DataFrame:
 #: Observables the literature varies that a GDS does contain, and that this
 #: repository has not implemented. Keeping them apart from the genuinely
 #: unavailable physics matters: one list is work, the other is a limit.
+#: Each row is (area, observable, reference, status, covered_by, why).
+#:
+#: ``status`` is the part that keeps this file honest, and it is why the row
+#: shape changed. The list once said "corner metal tiles" and "wide-metal
+#: slotting" were unimplemented after both had become channels, so the
+#: coverage statement shipped to a user contradicted the channels shipped
+#: beside it. Three statuses, and a test that a channel's own subject can only
+#: appear here as ``partial`` or ``not_recoverable``:
+#:
+#: * ``absent`` -- nothing of this is implemented.
+#: * ``partial`` -- the channels in ``covered_by`` cover part of it, and the
+#:   row says which part is still missing. Naming them is what makes the
+#:   check exact: a word match on the observable text called a crackstop row
+#:   a contradiction of corner_metal_tiles because both contain "corner".
+#: * ``not_recoverable`` -- no layout can supply it at all. Listed anyway
+#:   because each has a GDS-derived proxy nearby that is easy to mistake for
+#:   it.
 UNIMPLEMENTED_GDS_OBSERVABLES = (
     ("top metal", "explicit corner-tile morphology: tile size, count, pitch "
      "and the topology of the tile array",
-     "rabie2018cpi",
+     "rabie2018cpi", "partial", ("corner_metal_tiles",),
      "the corner_metal_tiles channel scores a proxy -- unslotted wide metal "
      "inside the corner region -- which says a corner is unbroken but not how "
      "it is tiled. Recovering the array itself needs the tile layer named in "
      "the manifest, which nothing currently asks for"),
     ("bump geometry", "a scored channel for drawn bump geometry",
-     "li2025beol_design_factors",
+     "li2025beol_design_factors", "partial", (),
      "the descriptors are extracted per bump and reported as feature maps, "
      "but no channel scores them: the study varies bump geometry and reports "
      "the response without fixing a direction that holds across stacks, and "
      "inventing one is what a channel would do"),
     ("bump geometry", "mechanically critical bump identity",
-     "li2023beol_failure_locations",
+     "li2023beol_failure_locations", "not_recoverable", (),
      "the outermost ring is flagged as a geometric fact, which is as far as a "
      "layout goes. Which bump carries the largest driving force depends on "
-     "package loading and on the stiffness of everything above it, so this "
-     "one is not recoverable from a GDS at all and is listed here only "
-     "because the outermost-bump proxy is easy to mistake for it"),
+     "package loading and on the stiffness of everything above it"),
+    ("crackstop", "rail-to-rail spacing beyond the outermost pair, and the "
+     "connectivity graph inside a corner window",
+     "rabie2018cpi", "partial", ("crackstop_structure",),
+     "narrowest width, rail count, continuity, gap count and the per-corner "
+     "narrowest and asymmetry are extracted; a stack of three or more rails "
+     "reports only the outer spacing, and a corner is summarised by width and "
+     "piece count rather than by how its rails are bridged"),
     ("shape measurement", "an object-level quantisation declared per layer "
      "rather than taken from the database unit",
-     "-",
+     "-", "absent", (),
      "descriptors are rounded to the database unit and corner angles to 0.1 "
      "degrees, which is what a layout can express. A process whose drawn grid "
      "is coarser than its database unit would want its own figure, and "
      "nothing currently asks for one"),
     ("PI opening", "sidewall and taper angle",
-     "rabie2018cpi",
-     "not recoverable: a GDS holds no Z information, so no vertical angle "
-     "exists in it. The manifest refuses a sidewall angle offered under the "
-     "plan-view key rather than silently treating one as the other"),
+     "rabie2018cpi", "not_recoverable", (),
+     "a GDS holds no Z information, so no vertical angle exists in it. The "
+     "manifest refuses a sidewall angle offered under the plan-view key "
+     "rather than silently treating one as the other"),
 )
+
+
 def _unimplemented_observables() -> pd.DataFrame:
-    # "recoverable" is per row, not per file. Two entries here are *not*
-    # recoverable from a layout -- the critical-bump identity and any sidewall
-    # angle -- and they are listed anyway because each has a GDS-derived proxy
-    # nearby that is easy to mistake for it. Marking the whole file recoverable
-    # would make the ledger say the opposite of what it means.
-    not_recoverable = ("mechanically critical bump identity",
-                       "sidewall and taper angle")
     return pd.DataFrame([
         {"area": area, "observable": observable, "reference": ref,
-         "recoverable_from_gds": observable not in not_recoverable,
-         "why_it_matters": why, "status": "not implemented"}
-        for area, observable, ref, why in UNIMPLEMENTED_GDS_OBSERVABLES])
+         "status": status, "covered_by": ";".join(covered),
+         "recoverable_from_gds": status != "not_recoverable",
+         "why_it_matters": why}
+        for area, observable, ref, status, covered, why
+        in UNIMPLEMENTED_GDS_OBSERVABLES])
 
 
 def _unsupported_physics(atlas: Atlas) -> pd.DataFrame:

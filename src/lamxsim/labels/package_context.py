@@ -306,6 +306,7 @@ SHAPE_FEATURES = (
     "pi_corner_angle_departure_deg", "pi_pad_centroid_offset_um",
     "crackstop_rail_width_min_um", "crackstop_rail_count",
     "crackstop_continuity_ratio", "crackstop_n_gaps",
+    "crackstop_corner_narrowest_um", "crackstop_corner_asymmetry",
 )
 
 
@@ -323,21 +324,32 @@ def object_table(reader: LayoutReader, layers: PackageLayers,
 
     kinds = {"bump": layers.bump, "pad": layers.pad,
              "pi_opening": layers.pi_opening}
-    table = {kind: obj.objects_for(reader, spec, kind=kind,
-                                   polarity=semantics.polarity_of(kind),
-                                   die_bbox=die_bbox)
-             for kind, spec in kinds.items()}
+    table, polys = {}, {}
+    for kind, spec in kinds.items():
+        polarity = semantics.polarity_of(kind)
+        table[kind] = obj.objects_for(reader, spec, kind=kind,
+                                      polarity=polarity, die_bbox=die_bbox)
+        polys[kind] = (list(obj.region_for(reader, spec, polarity).each())
+                       if spec is not None else [])
+    # The crackstop is a structure rather than an array of objects, so it has
+    # its own row shape; it is carried here so the object table can hold every
+    # package object the manifest names and not a subset of them.
+    table["crackstop"] = obj.objects_for(
+        reader, layers.crackstop, kind="crackstop",
+        polarity=semantics.polarity_of("crackstop"), die_bbox=die_bbox)
 
     matches = {}
     rule = semantics.object_matching
     tol = semantics.match_tolerance_um
     for primary, secondary in (("pad", "bump"), ("pi_opening", "pad")):
-        pr, sr = kinds[primary], kinds[secondary]
-        regions = ((reader.region(pr), reader.region(sr))
-                   if pr is not None and sr is not None else None)
+        # The polygons themselves, not the layer regions: containment is
+        # polygon containment, and an overlap fraction taken against a box
+        # around the primary lets a neighbouring pad into the denominator.
+        both = (polys[primary], polys[secondary])
         matches[(primary, secondary)] = obj.match(
             table[primary], table[secondary], rule=rule, die_bbox=die_bbox,
-            tolerance_um=tol, regions=regions, dbu=reader.units.dbu)
+            tolerance_um=tol,
+            polygons=both if all(both) else None, dbu=reader.units.dbu)
     return table, matches
 
 
@@ -459,14 +471,32 @@ def extract_shapes(grid, die_bbox: BBox | None, reader: LayoutReader,
 
     structure = obj.crackstop_structure(reader, layers.crackstop, die_bbox)
     if structure is not None:
-        # A structure is one fact about the whole ring, not a per-cell one, so
-        # it is broadcast: every cell carries the same value. That makes it
-        # useless for ranking within one die and useful for comparing dies,
-        # which is what the channel says about itself.
+        # Whole-ring facts, broadcast. They cannot be ranked within one die --
+        # every cell carries the same value -- and they are not meant to be:
+        # they are the right shape for comparing die, and they travel in the
+        # feature maps and in package_objects.csv for that.
         for name, value in (
                 ("crackstop_rail_width_min_um", structure.rail_width_min_um),
                 ("crackstop_rail_count", float(structure.n_rails)),
                 ("crackstop_continuity_ratio", structure.continuity_ratio),
                 ("crackstop_n_gaps", float(structure.n_gaps))):
             out[name] = np.full(n, value, dtype=float)
+
+    # Corner-resolved, which is what can be ranked within a die and is where
+    # the lever is. Each cell carries its own die corner's figures, so a
+    # corner drawn narrower than the other three is locatable.
+    topology = obj.corner_topology(reader, layers.crackstop, die_bbox)
+    if topology:
+        per_corner = topology["per_corner"]
+        mx = (die_bbox.xmin + die_bbox.xmax) / 2
+        my = (die_bbox.ymin + die_bbox.ymax) / 2
+        narrowest = np.full(n, np.nan)
+        for cell in grid.cells:
+            key = ("l" if cell.x_center < mx else "r")
+            key = ("l" if cell.y_center < my else "u") + key
+            key = {"ll": "ll", "lr": "lr", "ul": "ul", "ur": "ur"}[key]
+            narrowest[cell.cell_id] = per_corner[key]["narrowest_um"]
+        out["crackstop_corner_narrowest_um"] = narrowest
+        out["crackstop_corner_asymmetry"] = np.full(
+            n, topology["corner_asymmetry"], dtype=float)
     return out

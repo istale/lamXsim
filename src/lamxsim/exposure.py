@@ -239,20 +239,23 @@ CHANNELS: tuple[Channel, ...] = (
                   "whether it is continuous -- not about how far a cell is "
                   "from it",
         references=("rabie2018cpi",),
-        observable="drawn rail width, rail count, continuity ratio and gap "
-                   "count of the seal-ring structure",
-        inputs=("crackstop_rail_width_min_um", "crackstop_continuity_ratio"),
+        observable="drawn narrowest rail width at each die corner, and how "
+                   "much the four corners differ from each other",
+        inputs=("crackstop_corner_narrowest_um", "crackstop_corner_asymmetry"),
         two_sided=False, invert=True, scope="die",
         unsupported_physics=("crack arrest effectiveness", "interface "
                              "toughness at the ring", "dicing damage"),
         requires=("a crackstop layer",),
-        note="Inverted: a narrow or interrupted ring is the departure, so the "
-             "low end is what is flagged. These are one fact about the whole "
-             "ring, so every cell carries the same value and the within-die "
-             "ranking correctly reports nothing -- the quantity discriminates "
-             "between die, which is the comparison the channel is for. "
-             "Distance to the crackstop is a different feature and stays "
-             "separate.",
+        note="Corner-resolved on purpose. Rail width, rail count and "
+             "continuity for the ring as a whole are one fact about the die: "
+             "broadcast to every cell they cannot be ranked within it, so a "
+             "channel reading them can only ever report nothing. They are "
+             "still extracted and written to package_objects.csv, where they "
+             "are the right shape for comparing die. What can be ranked "
+             "within one die is the corner, which is where Rabie's lever is "
+             "and where the package load turns. Inverted: a narrow or "
+             "asymmetric corner is the departure. Distance to the crackstop "
+             "is a different feature and stays separate.",
     ),
     Channel(
         channel_id="routing_in_bump_frame",

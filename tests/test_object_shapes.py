@@ -181,13 +181,17 @@ def test_matching_records_its_rule_and_its_doubt(tmp_path):
     bumps = obj.objects_for(reader, LayerSpec("BUMP", 80, 0), kind="bump",
                             polarity="positive", die_bbox=DIE)
 
-    matches = obj.match(pads, bumps, rule="containment", die_bbox=DIE,
-                        regions=(reader.region(LayerSpec("PAD", 81, 0)),
-                                 reader.region(LayerSpec("BUMP", 80, 0))))
+    matches = obj.match(
+        pads, bumps, rule="containment", die_bbox=DIE,
+        polygons=(list(reader.region(LayerSpec("PAD", 81, 0)).each()),
+                  list(reader.region(LayerSpec("BUMP", 80, 0)).each())))
     assert len(matches) == 2, "the unmatched pad must not produce a row"
     offset = {m.primary_id: m for m in matches}
     concentric = next(m for m in matches if m.centroid_offset_um == 0.0)
-    assert concentric.overlap_fraction == pytest.approx(0.36, rel=0.05)
+    # 12x12 bump inside a 20x20 pad, measured on the two polygons themselves
+    # rather than on the layer clipped to a box, so a neighbouring pad cannot
+    # enter the denominator.
+    assert concentric.overlap_fraction == pytest.approx(144 / 400, rel=0.02)
     shifted = next(m for m in matches if m.centroid_offset_um > 0)
     # Quantised to the database unit: a GDS cannot express a finer offset,
     # and leaving the arithmetic tail in gets it ranked.
@@ -263,8 +267,11 @@ def test_a_cut_ring_is_reported_as_segmented(tmp_path):
     box(10, 186, 190, 190)        # top rail, separate: the ring is cut
     structure = obj.crackstop_structure(LayoutReader(str(_write_layout(
         layout, tmp_path / "cut.gds"))), LayerSpec("CS", 62, 0), DIE)
+    # A ring cut in two places leaves two arcs and two gaps, and no component
+    # that closes on itself.
     assert structure.n_components == 2
-    assert structure.n_gaps == 1
+    assert structure.n_rails == 0
+    assert structure.n_gaps == 2
     assert structure.continuity_ratio < 1.0
 
 
@@ -397,3 +404,179 @@ def test_an_undeclarable_matching_rule_is_refused(tmp_path):
     yaml.safe_dump(raw, open(path, "w"))
     with pytest.raises(ValueError, match="polarity"):
         StudyManifest.load(path)
+
+
+def _ring(outer_um, wall_um, dbu=0.001):
+    import klayout.db as db
+
+    u = 1 / dbu
+    o = int(outer_um * u)
+    i = int((outer_um - wall_um) * u)
+    return (db.Region(db.Box(-o, -o, o, o))
+            - db.Region(db.Box(-i, -i, i, i)))
+
+
+def _ring_gds(path, regions, layer=62):
+    import klayout.db as db
+
+    layout = db.Layout()
+    layout.dbu = 0.001
+    top = layout.create_cell("TOP")
+    li = layout.layer(layer, 0)
+    for region in regions:
+        top.shapes(li).insert(region)
+    layout.write(str(path))
+    return str(path)
+
+
+def test_crackstop_tells_a_double_rail_from_a_cut_ring(tmp_path):
+    """Two components can be the recommended structure or the defect.
+
+    Two concentric rails and a ring cut in two places both give two polygons,
+    and they are opposite things. Counting components alone reported a healthy
+    double rail as one gap with a continuity of 0.53 -- the recommended
+    structure scored as damage. They are told apart by whether each component
+    closes on itself.
+    """
+    die = BBox(-100.0, -100.0, 100.0, 100.0)
+    spec = LayerSpec("CS", 62, 0)
+
+    double = obj.crackstop_structure(LayoutReader(_ring_gds(
+        tmp_path / "double.gds", [_ring(90, 8), _ring(75, 8)])), spec, die)
+    assert double.n_rails == 2 and double.n_components == 2
+    assert double.n_gaps == 0
+    assert double.continuity_ratio == pytest.approx(1.0)
+    assert double.rail_spacing_um == pytest.approx(7.0, abs=0.05)
+
+    import klayout.db as db
+
+    u = 1000
+    cut = obj.crackstop_structure(LayoutReader(_ring_gds(
+        tmp_path / "cut.gds",
+        [db.Region(db.Box(-90 * u, -90 * u, 90 * u, -82 * u)),
+         db.Region(db.Box(-90 * u, 82 * u, 90 * u, 90 * u))])), spec, die)
+    assert cut.n_rails == 0 and cut.n_components == 2
+    assert cut.n_gaps == 2
+    assert cut.continuity_ratio < 1.0
+
+
+def test_the_rail_width_is_the_narrowest_place_not_the_widest(tmp_path):
+    """Two earlier versions measured the opposite, and one missed the pinch.
+
+    Accepting an opening if any part survived returns the widest place on the
+    rail. Accepting it if 99 % of the area survived misses a neck: a 10 um
+    pinch on a 1400 um ring is a fraction of a percent of its area, so an 8 um
+    ring pinched to 3 um still reported 8 um.
+    """
+    import klayout.db as db
+
+    u = 1000
+    pinched = (_ring(90, 8)
+               - db.Region(db.Box(-5 * u, -90 * u, 5 * u, -85 * u)))
+    structure = obj.crackstop_structure(
+        LayoutReader(_ring_gds(tmp_path / "pinch.gds", [pinched])),
+        LayerSpec("CS", 62, 0), BBox(-100.0, -100.0, 100.0, 100.0))
+    assert structure.rail_width_min_um == pytest.approx(3.0, abs=0.05)
+    assert structure.n_gaps == 0        # narrow, but not cut
+
+
+def test_corner_topology_locates_a_corner_drawn_differently(tmp_path):
+    """A whole-ring number cannot say which corner, and the lever is a corner."""
+    import klayout.db as db
+
+    u = 1000
+    thin_corner = (_ring(90, 8)
+                   - db.Region(db.Box(-90 * u, -90 * u, -70 * u, -85 * u)))
+    topology = obj.corner_topology(
+        LayoutReader(_ring_gds(tmp_path / "corner.gds", [thin_corner])),
+        LayerSpec("CS", 62, 0), BBox(-90.0, -90.0, 90.0, 90.0),
+        window_um=40.0)
+    per_corner = topology["per_corner"]
+    assert per_corner["ll"]["narrowest_um"] < per_corner["ur"]["narrowest_um"]
+    assert topology["corner_asymmetry"] > 1.0
+    assert topology["corner_narrowest_um"] == pytest.approx(
+        per_corner["ll"]["narrowest_um"])
+
+
+def test_polarity_inverts_the_geometry_and_not_only_the_label(tmp_path):
+    """Declaring a polarity and describing the drawn polygon anyway is worse
+    than not declaring one: the answer is wrong and correctly labelled.
+
+    A 200x200 um film with a 40x40 um opening reported 38400 um^2 either way.
+    Every PI area, diameter, aspect ratio, orientation and pad match would
+    have been computed on the film.
+    """
+    import klayout.db as db
+
+    u = 1000
+    film = (db.Region(db.Box(0, 0, 200 * u, 200 * u))
+            - db.Region(db.Box(80 * u, 80 * u, 120 * u, 120 * u)))
+    path = _ring_gds(tmp_path / "film.gds", [film], layer=61)
+    reader = LayoutReader(path)
+    spec = LayerSpec("PI", 61, 0)
+
+    positive = obj.objects_for(reader, spec, kind="pi_opening",
+                               polarity="positive", die_bbox=DIE)[0]
+    opening = obj.objects_for(reader, spec, kind="pi_opening",
+                              polarity="opening", die_bbox=DIE)[0]
+    assert positive.area_um2 == pytest.approx(200 * 200 - 40 * 40)
+    assert opening.area_um2 == pytest.approx(40 * 40)
+    assert opening.equivalent_diameter_um < positive.equivalent_diameter_um
+
+    # A layer declared as openings whose polygons have no holes is already
+    # drawn as the openings; nothing to invert, and nothing lost.
+    drawn = _ring_gds(tmp_path / "drawn.gds",
+                      [db.Region(db.Box(80 * u, 80 * u, 120 * u, 120 * u))],
+                      layer=61)
+    direct = obj.objects_for(LayoutReader(drawn), spec, kind="pi_opening",
+                             polarity="opening", die_bbox=DIE)[0]
+    assert direct.area_um2 == pytest.approx(40 * 40)
+
+
+def test_containment_is_polygon_containment(tmp_path):
+    """A bar and a square of equal area have the same equivalent radius.
+
+    Judging containment by a circle of that radius puts a bump 20 um clear of
+    a 200x10 um bar pad inside it.
+    """
+    reader = _write(tmp_path, "bar.gds", {
+        81: [_rect(100, 5, 100, 5)],        # a 200 x 10 bar along the bottom
+        80: [_square(100, 22, 5)]})         # a bump well above it
+    pads = obj.objects_for(reader, LayerSpec("PAD", 81, 0), kind="pad",
+                           polarity="positive", die_bbox=DIE)
+    bumps = obj.objects_for(reader, LayerSpec("BUMP", 80, 0), kind="bump",
+                            polarity="positive", die_bbox=DIE)
+    # The bump is inside the equivalent-area circle...
+    assert math.hypot(bumps[0].x_um - pads[0].x_um,
+                      bumps[0].y_um - pads[0].y_um) < \
+        pads[0].equivalent_diameter_um / 2
+    # ...and outside the pad.
+    assert obj.match(pads, bumps, rule="containment", die_bbox=DIE,
+                     polygons=(list(reader.region(LayerSpec("PAD", 81, 0)).each()),
+                               list(reader.region(LayerSpec("BUMP", 80, 0)).each()))) == []
+
+    with pytest.raises(ValueError, match="needs the polygons"):
+        obj.match(pads, bumps, rule="containment", die_bbox=DIE)
+
+
+def test_one_to_one_drops_a_pair_that_is_not_mutual(tmp_path):
+    """Reporting the rule and not applying it is the failure this repeats.
+
+    Two pads over one bump used to produce two rows, both naming the
+    one-to-one rule and both pointing at bump:0, with a note on the second.
+    """
+    reader = _write(tmp_path, "one.gds", {
+        81: [_square(20, 20, 20), _square(80, 20, 20)],
+        80: [_square(20, 20, 10)]})
+    pads = obj.objects_for(reader, LayerSpec("PAD", 81, 0), kind="pad",
+                           polarity="positive", die_bbox=DIE)
+    bumps = obj.objects_for(reader, LayerSpec("BUMP", 80, 0), kind="bump",
+                            polarity="positive", die_bbox=DIE)
+
+    one_to_one = obj.match(pads, bumps, rule="one_to_one", die_bbox=DIE)
+    assert len(one_to_one) == 1
+    assert {m.secondary_id for m in one_to_one} == {"bump:0"}
+
+    # "nearest" makes no such promise and is allowed to share the bump.
+    nearest = obj.match(pads, bumps, rule="nearest", die_bbox=DIE)
+    assert len(nearest) == 2

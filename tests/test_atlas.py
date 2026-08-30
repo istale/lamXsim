@@ -451,37 +451,45 @@ def test_the_corner_tile_lever_is_top_layer_and_corner_only(tmp_path):
 def test_the_coverage_ledger_does_not_contradict_the_channels():
     """A ledger that lists implemented work is worse than no ledger.
 
-    ``unimplemented_gds_observables.csv`` is what a user reads to know what
-    the atlas does not cover. It listed corner metal tiles and wide-metal
-    slotting after both became channels, so the delivered coverage statement
-    contradicted the delivered channels. Nothing caught it because nothing
-    compared the two.
+    ``unimplemented_gds_observables.csv`` is what a user reads to know what the
+    atlas does not cover. It listed corner metal tiles and wide-metal slotting
+    after both became channels, so the coverage statement shipped to a user
+    contradicted the channels shipped beside it. Nothing caught it because
+    nothing compared the two.
+
+    The check is structural rather than a word match: each row carries a
+    status and, when partial, the channels that already cover part of it. A
+    word match called a crackstop row a contradiction of corner_metal_tiles
+    because both contain "corner", which is the kind of check that gets
+    loosened until it passes.
     """
     from lamxsim import atlas as atlas_mod
 
     ledger = atlas_mod._unimplemented_observables()
-    text = " ".join(ledger.observable.str.lower())
+    assert set(ledger.status) <= {"absent", "partial", "not_recoverable"}
 
-    implemented = {c.channel_id for c in exposure.CHANNELS}
-    for channel_id in implemented:
-        words = channel_id.replace("_", " ")
-        # A channel's own name must not appear as an unimplemented item unless
-        # the row says which *part* is still missing.
-        rows = ledger[ledger.observable.str.lower().str.contains(
-            words.split()[0], regex=False)]
+    known = {c.channel_id for c in exposure.CHANNELS}
+    for _, row in ledger.iterrows():
+        named = [c for c in row.covered_by.split(";") if c]
+        assert set(named) <= known, f"{row.observable!r} names {named}"
+        if row.status == "absent":
+            assert not named, (
+                f"{row.observable!r} is marked absent but names {named}")
+
+    # Every channel that exists must be findable: if a channel's subject is in
+    # the ledger at all, the row has to name it rather than read as untouched.
+    for channel_id in known:
+        rows = ledger[ledger.covered_by.str.contains(channel_id, regex=False)]
         for _, row in rows.iterrows():
-            assert any(w in row.why_it_matters.lower()
-                       for w in ("proxy", "not recoverable", "no channel",
-                                 "not recoverable from a gds")), (
-                f"{row.observable!r} reads as unimplemented while "
-                f"{channel_id} exists; say which part is still missing")
+            assert row.status == "partial", (
+                f"{row.observable!r} names {channel_id} but is {row.status}")
 
-    # Every remaining row must state whether a GDS could supply it at all.
-    assert set(ledger.recoverable_from_gds) <= {True, False}
-    assert (~ledger.recoverable_from_gds).any(), (
-        "the two entries that a layout genuinely cannot supply -- critical "
-        "bump identity and any sidewall angle -- must stay marked as such")
-    assert "sidewall" in text and "critical bump" in text
+    # The two a layout genuinely cannot supply must stay marked as such, and
+    # must stay listed: each has a proxy nearby that is easy to mistake for it.
+    not_recoverable = set(ledger[ledger.status == "not_recoverable"].observable)
+    assert any("sidewall" in o for o in not_recoverable)
+    assert any("critical bump" in o for o in not_recoverable)
+    assert (~ledger.recoverable_from_gds).sum() == len(not_recoverable)
 
 
 def test_every_channel_input_is_traceable_to_the_registry():
