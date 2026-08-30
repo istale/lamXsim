@@ -22,7 +22,7 @@ from ..evidence import EvidenceClass
 REQUIRED_COLUMNS = ("sample_id", "x_um", "y_um", "failure_type")
 GROUPING_COLUMNS = ("lot_id", "wafer_id", "die_x", "die_y")
 OPTIONAL_COLUMNS = ("confidence", "position_sigma_um", "extent_um", "coord_frame",
-                    "failed_layer", "failed_interface")
+                    "failed_layer", "failed_interface", "layout_revision")
 
 #: Columns whose distinct values define separate failure populations. Li et al.
 #: (2023) found the largest energy release rate at one particular upper BEOL
@@ -67,6 +67,37 @@ class FailureSet:
 
     def n_dies(self) -> int:
         return int(self.die_keys().nunique())
+
+    def layout_revisions(self) -> list[str]:
+        """Distinct layout revisions the failures claim to come from."""
+        if "layout_revision" not in self.table:
+            return []
+        return sorted(self.table["layout_revision"].dropna().astype(str).unique())
+
+    def assert_single_layout_revision(self, declared: str | None) -> list[str]:
+        """Refuse failures drawn from a layout other than the one being analysed.
+
+        Every feature is extracted from one GDS, and every die's labels are
+        mapped onto that one layout. If a lot spans a revision, some failures
+        are being scored against geometry that was not on the silicon they
+        came from -- which is not a small error, because a revision usually
+        changes exactly the metal the study is about.
+        """
+        found = self.layout_revisions()
+        if not found:
+            return ["failures carry no layout_revision: the assumption that "
+                    "every die shares the layout being analysed is unverified"]
+        if len(found) > 1:
+            raise ValueError(
+                f"the failure set spans layout revisions {found}. Features "
+                "come from one GDS, so failures from another revision would be "
+                "scored against geometry that was not on their silicon. Split "
+                "the study by revision.")
+        if declared is not None and found[0] != declared:
+            raise ValueError(
+                f"the failures are from layout revision {found[0]!r} but the "
+                f"manifest declares {declared!r}.")
+        return []
 
     def modes(self) -> dict[str, list]:
         """Distinct values of every column that defines a failure population."""

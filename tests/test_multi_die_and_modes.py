@@ -189,3 +189,60 @@ def test_absent_failed_layer_is_recorded_as_an_unseparated_population(tmp_path):
     joined = " ".join(fs.notes)
     assert "failed_layer absent" in joined
     assert "failed_interface absent" in joined
+
+
+# ---- one layout for every die --------------------------------------
+
+def _revision_set(revisions):
+    table = pd.DataFrame({
+        "sample_id": ["A", "B"], "lot_id": "L1", "wafer_id": "W1",
+        "die_x": [0, 1], "die_y": 0, "x_um": [10.0, 20.0],
+        "y_um": [10.0, 20.0], "failure_type": "delamination",
+        "confidence": 1.0, "position_sigma_um": np.nan})
+    if revisions is not None:
+        table["layout_revision"] = revisions
+    return FailureSet(table=table)
+
+
+def test_failures_spanning_layout_revisions_are_refused():
+    """Features come from one GDS; a failure from another revision would be
+    scored against geometry that was never on its silicon."""
+    with pytest.raises(ValueError, match="spans layout revisions"):
+        _revision_set(["revA", "revB"]).assert_single_layout_revision(None)
+
+
+def test_a_revision_that_disagrees_with_the_manifest_is_refused():
+    with pytest.raises(ValueError, match="manifest declares"):
+        _revision_set(["revA", "revA"]).assert_single_layout_revision("revB")
+
+
+def test_a_matching_revision_needs_no_note():
+    assert _revision_set(["revB", "revB"]).assert_single_layout_revision("revB") == []
+
+
+def test_an_absent_revision_column_records_the_assumption():
+    notes = _revision_set(None).assert_single_layout_revision(None)
+    assert notes and "unverified" in notes[0]
+
+
+def test_the_run_records_the_layout_it_analysed(die_path):
+    reader = LayoutReader(die_path)
+    grid = build_grid(reader.bbox(), 100.0)
+    feats = GeometryExtractor(reader, line_end_w_max_um=4.0).extract(M8, grid)
+    fs = failures_from_driver(feats["perimeter_density"], grid, n_failures=40,
+                              strength=2.5, seed=1, position_sigma_um=5.0)
+    res = pipeline.run(die_path, fs, layer=M8, scales_um=(100,),
+                       n_permutations=0, line_end_w_max_um=4.0, seed=1)
+    digest = res.metadata["gds_sha256"]
+    assert len(digest) == 64 and int(digest, 16) >= 0
+    assert any("no layout_revision" in n
+               for n in res.metadata["uncontrolled_confounding"])
+
+
+def test_manifest_records_an_undeclared_layout_revision(tmp_path):
+    from lamxsim.study import StudyManifest
+
+    p = tmp_path / "m.yaml"
+    p.write_text(
+        "layout:\n  metal_layers:\n    - {name: M8, layer: 8, datatype: 0}\n")
+    assert any("no layout_revision" in g for g in StudyManifest.load(p).gaps)

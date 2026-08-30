@@ -176,8 +176,6 @@ without pretending to know hidden physics. Status verified against the code.
 ### A'. Remaining, in the order they change a conclusion
 
 1. PI-opening shape descriptors and pad overlap fraction.
-2. Per-die inspection footprints, and an explicit assertion that every die
-   shares the layout revision being analysed.
 3. `failed_layer` and `failed_interface` used to stratify rather than only to
    refuse pooling.
 4. A traceability matrix from literature to mechanism to GDS observable to

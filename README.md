@@ -171,6 +171,34 @@ part of the schema, a file mixing modes is refused, and pooling can be asserted
 — `--allow-pooling-modes` — with the assertion recorded in the run metadata as
 the operator's judgement rather than a property of the data.
 
+## One population per die, and one layout for all of them
+
+Inspection footprints are declared per die, with a default for the rest. A
+campaign rarely inspects every die the same way -- one gets a full acoustic
+scan, another three cross-sections chosen after it -- and collapsing that to a
+single footprint either discards the dies inspected more thoroughly or credits
+the ones inspected less with controls nobody earned. Eligibility is therefore
+per (cell, die): a cell inspected on one die and not on another is a control on
+the first and missing data on the second. A die with no footprint and no
+default is refused rather than treated as fully inspected.
+
+A failure that lands outside its die's footprint by less than three times its
+own reported positional uncertainty is treated as the same failure seen
+through its own error, not as a contradiction. Without that, the check fires
+on the near-edge failures of every real campaign and gets overridden as a
+matter of routine -- and a check everyone overrides is not a check. Beyond the
+tolerance, measurement error stops being an explanation. With no reported
+sigma the boundary is strict: no stated uncertainty, no room to grant.
+
+Failures may carry a `layout_revision`, and one that disagrees with the
+manifest, or a file spanning two of them, is refused. Every feature comes from
+one GDS and every die's labels are mapped onto it, so a failure from another
+revision would be scored against geometry that was never on its silicon -- and
+a revision usually changes exactly the metal a study is about. Absent the
+column, the run records that the assumption is unverified. The SHA-256 of the
+layout is written into the run metadata, so a result names the file that
+produced it.
+
 ## Routing direction is a layout lever, and needs the bump frame to see
 
 Rabie et al. (2018) recommend running the final metal *diagonally* under the
@@ -544,9 +572,9 @@ edge distance, and wide metal, slotting and declared dummy fill as their own
 family. Not yet expressed: pad overlap fraction and PI-opening shape
 descriptors.
 
-**One inspection footprint and one layout revision for all dies.** Per-die
-footprints are not expressible, and the run assumes every die shares the GDS
-being analysed. A lot spanning a layout revision has to be split by hand.
+**Failure mode is checked, not used.** `failed_layer` and `failed_interface`
+are in the schema and a file mixing them is refused, but they cannot yet
+stratify a single analysis -- the interfaces have to be run separately.
 
 **Deliberately not built.** Sections 4G-4I (connectivity, largest structures,
 empty area) are `exploratory` tier with no direct delamination evidence, so

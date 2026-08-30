@@ -195,11 +195,11 @@ def cmd_run(args) -> int:
                 return 1
 
     # -- analysis ----------------------------------------------------
-    footprint = manifest.footprint(reader, bbox)
+    footprints = manifest.footprint_set(reader, bbox)
     res = pipeline.run(
         args.gds, failures, layers=manifest.metal_layers,
         via_layers=manifest.via_layers, package_layers=manifest.package_layers,
-        footprint=footprint, min_coverage=manifest.min_coverage,
+        footprints=footprints, min_coverage=manifest.min_coverage,
         die_bbox=bbox, top_cell=manifest.top_cell,
         scales_um=tuple(scales), n_permutations=manifest.n_permutations,
         with_gradients=manifest.with_gradients,
@@ -207,6 +207,7 @@ def cmd_run(args) -> int:
         line_end_w_max_um=manifest.line_end_w_max_um(),
         line_rules=manifest.line_rule_map(),
         fill_layers=manifest.fill_layers, wide_width_um=manifest.wide_width_um,
+        layout_revision=manifest.layout_revision,
         seed=args.seed,
         allow_pooling_modes=args.allow_pooling_modes,
         allow_failures_outside_footprint=args.allow_failures_outside_footprint)

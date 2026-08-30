@@ -130,19 +130,44 @@ def eligibility(footprint: InspectionFootprint, grid, *,
     return frac >= min_coverage, frac
 
 
+#: A failure may sit outside the footprint by this many standard deviations of
+#: its own positional uncertainty without that being evidence of a wrong frame.
+#: It matches the factor the scale floor uses, so "close enough to be the same
+#: place" means the same thing in both.
+TOLERANCE_SIGMAS = 3.0
+
+
 def audit_failures(footprint: InspectionFootprint, failures, *,
-                   dbu: float = 0.001) -> dict:
+                   dbu: float = 0.001, tolerance_um: float | None = None
+                   ) -> dict:
     """Check that every recorded failure lies inside the inspected footprint.
 
-    A failure outside it is a contradiction -- something was found where
-    nothing was looked at -- and means the footprint, the registration or the
-    coordinate frame is wrong. It is reported rather than quietly tolerated,
-    because each of those three causes invalidates a different part of the
-    analysis.
+    A failure genuinely outside it is a contradiction -- something was found
+    where nothing was looked at -- and means the footprint, the registration
+    or the coordinate frame is wrong. Each of those invalidates a different
+    part of the analysis, so it is reported rather than tolerated.
+
+    But a failure a few micrometres outside a boundary, measured with a
+    positional uncertainty larger than that, is not a contradiction: it is the
+    same failure seen through its own error. Treating it as one would make the
+    check fire on every real campaign, and a check everyone overrides is not a
+    check. The tolerance defaults to the failure set's own reported sigma
+    times :data:`TOLERANCE_SIGMAS`; beyond it, measurement error is no longer
+    an explanation.
     """
+    if tolerance_um is None:
+        sigma = failures.position_sigma_um
+        tolerance_um = (TOLERANCE_SIGMAS * sigma
+                        if np.isfinite(sigma) and sigma > 0 else 0.0)
+
     x = failures.table["x_um"].to_numpy(float)
     y = failures.table["y_um"].to_numpy(float)
+    strict = footprint.region
+    tolerant = (strict if tolerance_um <= 0
+                else strict.sized(int(round(tolerance_um / dbu))))
+
     inside = np.zeros(len(x), dtype=bool)
+    within_tolerance = np.zeros(len(x), dtype=bool)
     for i, (xi, yi) in enumerate(zip(x, y)):
         px, py = int(round(xi / dbu)), int(round(yi / dbu))
         # Centred on the point, not extending from it. A one-sided probe at a
@@ -150,14 +175,81 @@ def audit_failures(footprint: InspectionFootprint, failures, *,
         # along a line, which has no area, and the failure is reported as
         # outside -- a contradiction manufactured by the probe.
         probe = db.Region(db.Box(px - 1, py - 1, px + 1, py + 1))
-        inside[i] = not (footprint.region & probe).is_empty()
+        inside[i] = not (strict & probe).is_empty()
+        if not inside[i]:
+            within_tolerance[i] = not (tolerant & probe).is_empty()
 
-    outside = np.where(~inside)[0]
+    beyond = np.where(~inside & ~within_tolerance)[0]
     ids = failures.table["sample_id"].astype(str).to_numpy()
     return {
         "n_failures": len(x),
         "n_inside_footprint": int(inside.sum()),
-        "n_outside_footprint": int((~inside).sum()),
-        "outside_sample_ids": list(ids[outside][:10]),
-        "consistent": bool(inside.all()),
+        "n_within_tolerance": int(within_tolerance.sum()),
+        "n_outside_footprint": int(len(beyond)),
+        "tolerance_um": float(tolerance_um),
+        "outside_sample_ids": list(ids[beyond][:10]),
+        "consistent": bool(len(beyond) == 0),
     }
+
+
+@dataclass
+class FootprintSet:
+    """One inspected footprint per die, with a fallback for the rest.
+
+    A campaign rarely inspects every die the same way: one die gets a full
+    acoustic scan, another gets three FIB cross-sections chosen after the
+    scan. Collapsing that to a single footprint either discards the dies that
+    were inspected more, or credits the ones inspected less with controls they
+    never earned.
+    """
+    default: InspectionFootprint | None = None
+    per_die: dict[str, InspectionFootprint] = field(default_factory=dict)
+
+    def for_die(self, die_key: str) -> InspectionFootprint | None:
+        return self.per_die.get(die_key, self.default)
+
+    @property
+    def is_uniform(self) -> bool:
+        return not self.per_die
+
+    def report(self, dbu: float = 0.001) -> dict:
+        return {
+            "uniform": self.is_uniform,
+            "default": self.default.report(dbu) if self.default else None,
+            "per_die": {k: v.report(dbu) for k, v in self.per_die.items()},
+        }
+
+
+def audit_failures_per_die(footprints: FootprintSet, failures, *,
+                           dbu: float = 0.001) -> dict:
+    """Check every failure against the footprint of the die it came from.
+
+    Auditing against a pooled footprint would pass a failure that lies inside
+    some other die's inspected area, which is not evidence that anyone looked
+    at the place it was found.
+    """
+    from dataclasses import replace as _replace
+
+    keys = failures.die_keys()
+    outside, missing = [], []
+    total_inside = 0
+    for key in keys.unique():
+        subset = _replace(failures,
+                          table=failures.table[keys == key].reset_index(drop=True))
+        fp = footprints.for_die(str(key))
+        if fp is None:
+            missing.append(str(key))
+            continue
+        result = audit_failures(fp, subset, dbu=dbu)
+        total_inside += result["n_inside_footprint"] + result["n_within_tolerance"]
+        outside.extend(f"{key}:{sid}" for sid in result["outside_sample_ids"])
+
+    return {
+        "n_failures": len(failures),
+        "n_inside_footprint": total_inside,
+        "n_outside_footprint": len(failures) - total_inside,
+        "outside_sample_ids": outside[:10],
+        "dies_without_a_footprint": missing,
+        "consistent": not outside and not missing,
+    }
+

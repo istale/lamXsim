@@ -33,6 +33,17 @@ from .labels.failure import FailureSet, map_to_grid, map_to_grid_per_die
 from .layout.reader import BBox, LayerSpec, LayoutReader
 
 
+def _file_digest(path: str) -> str:
+    """SHA-256 of the layout, so a result names the file that produced it."""
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _fmt(b) -> str:
     return f"[{b.xmin:g}, {b.ymin:g}] to [{b.xmax:g}, {b.ymax:g}]um"
 
@@ -144,6 +155,8 @@ def run(gds_path: str, failures: FailureSet, *,
         pair_selection: str = "adjacent_and_top",
         package_layers: "package_context.PackageLayers | None" = None,
         footprint: "inspection.InspectionFootprint | None" = None,
+        footprints: "inspection.FootprintSet | None" = None,
+        layout_revision: str | None = None,
         min_coverage: float = 0.5,
         allow_pooling_modes: bool = False,
         allow_failures_outside_footprint: bool = False,
@@ -218,10 +231,20 @@ def run(gds_path: str, failures: FailureSet, *,
     # footprint the analysis silently treats never-inspected area as clean,
     # and any feature correlated with where inspection was targeted picks up
     # an association from that alone.
-    if footprint is None:
-        footprint = inspection.InspectionFootprint.full_die(
-            geometry_bbox, "no inspection footprint supplied",
-            dbu=reader.units.dbu)
+    if footprints is None:
+        footprints = inspection.FootprintSet(default=footprint)
+    elif footprint is not None:
+        raise ValueError("pass footprint= or footprints=, not both")
+
+    if footprints.default is None and footprints.is_uniform:
+        footprints = inspection.FootprintSet(
+            default=inspection.InspectionFootprint.full_die(
+                geometry_bbox, "no inspection footprint supplied",
+                dbu=reader.units.dbu))
+    if (footprints.default is not None
+            and footprints.default.assumed_full_coverage
+            and footprints.default.justification ==
+            "no inspection footprint supplied"):
         context_notes.append(
             "no inspection footprint supplied: the whole die is being treated "
             "as inspected, so every cell without a recorded failure counts as "
@@ -230,6 +253,7 @@ def run(gds_path: str, failures: FailureSet, *,
             "association.")
     context_notes.extend(failures.assert_single_mode(
         allow_pooling=allow_pooling_modes))
+    context_notes.extend(failures.assert_single_layout_revision(layout_revision))
     n_dies = failures.n_dies()
     if n_dies == 1:
         context_notes.append(
@@ -237,7 +261,14 @@ def run(gds_path: str, failures: FailureSet, *,
             "here can be shown to generalise. Treat the result as a local "
             "diagnostic of this piece of silicon.")
 
-    audit = inspection.audit_failures(footprint, failures, dbu=reader.units.dbu)
+    audit = inspection.audit_failures_per_die(footprints, failures,
+                                              dbu=reader.units.dbu)
+    if audit["dies_without_a_footprint"]:
+        raise ValueError(
+            f"no inspected footprint for die(s) "
+            f"{audit['dies_without_a_footprint']}. A die with no declared "
+            "footprint has no control population: every cell on it would be "
+            "counted as inspected and clean. Declare one, or supply a default.")
     if not audit["consistent"]:
         message = (
             f"{audit['n_outside_footprint']} of {audit['n_failures']} failures "
@@ -273,9 +304,21 @@ def run(gds_path: str, failures: FailureSet, *,
         nearest = np.concatenate([per_die[d]["distance_to_nearest_failure"]
                                   for d in die_names])
 
-        eligible_cell, cover = inspection.eligibility(
-            footprint, grid, min_coverage=min_coverage, dbu=reader.units.dbu)
-        eligible = eligible_cell[cell_index]
+        # Eligibility is per (cell, die), because the footprint is: a cell
+        # inspected on one die and not on another is a control on the first
+        # and missing data on the second.
+        per_die_cover = {}
+        for name in die_names:
+            fp = footprints.for_die(name)
+            ok, frac = inspection.eligibility(
+                fp, grid, min_coverage=min_coverage, dbu=reader.units.dbu)
+            per_die_cover[name] = (ok, frac)
+        eligible = np.concatenate([per_die_cover[n][0] for n in die_names])
+        cover = np.concatenate([per_die_cover[n][1] for n in die_names])
+        # The cell-level mask used for lattice statistics takes a cell as
+        # usable when any die inspected it.
+        eligible_cell = np.any(
+            np.vstack([per_die_cover[n][0] for n in die_names]), axis=0)
         coverage_summary[scale] = {
             "n_cells": len(grid), "n_dies": len(die_names),
             "n_observations": int(len(y)),
@@ -284,12 +327,13 @@ def run(gds_path: str, failures: FailureSet, *,
             "n_cases_excluded": int(y[~eligible].sum()),
             "prevalence": float(y[eligible].mean()) if eligible.any() else float("nan"),
             "mean_coverage": float(cover.mean()),
+            "uniform_footprint": footprints.is_uniform,
         }
 
         cell_arrays = grid.to_arrays()
         frame = pd.DataFrame({k: v[cell_index] for k, v in cell_arrays.items()})
         frame["die_key"] = np.array(die_names)[die_index]
-        frame["inspected_fraction"] = cover[cell_index]
+        frame["inspected_fraction"] = cover
         frame["eligible"] = eligible
         frame["failure_present"] = y
         frame["distance_to_nearest_failure"] = nearest
@@ -350,9 +394,13 @@ def run(gds_path: str, failures: FailureSet, *,
             span = int(block_of_cell.max()) + 1
             return die_index * span + block_of_cell[cell_index], size
 
+        # Columns are collected and joined once. Assigning them one at a
+        # time re-allocates the frame on every insert, which on a real run is
+        # both slow and drowns the output in fragmentation warnings.
+        feature_columns: dict[str, np.ndarray] = {}
         for name, layer_name, cell_vals, ecls in columns:
             vals = cell_vals[cell_index]
-            frame[f"{name}|{layer_name}"] = vals
+            feature_columns[f"{name}|{layer_name}"] = vals
             finite = np.isfinite(vals) & eligible
             if finite.sum() < 8 or y[finite].sum() == 0:
                 continue
@@ -413,6 +461,8 @@ def run(gds_path: str, failures: FailureSet, *,
                 p.update(feature=name, layer=layer_name, scale_um=scale)
                 perm_rows.append(p)
 
+        frame = pd.concat(
+            [frame, pd.DataFrame(feature_columns, index=frame.index)], axis=1)
         feat_frames.append(frame)
 
     if not assoc_rows:
@@ -436,7 +486,8 @@ def run(gds_path: str, failures: FailureSet, *,
         "package_layers": {k: (str(v) if v else None) for k, v in
                            vars(package_layers).items()},
         "uncontrolled_confounding": context_notes,
-        "inspection_footprint": footprint.report(reader.units.dbu),
+        "inspection_footprint": footprints.report(reader.units.dbu),
+        "layout_revision": layout_revision,
         "min_coverage": min_coverage,
         "coverage_by_scale": coverage_summary,
         "failure_footprint_audit": audit,
@@ -454,6 +505,8 @@ def run(gds_path: str, failures: FailureSet, *,
         "n_failures": len(failures),
         "n_dies": n_dies,
         "failure_modes": failures.modes(),
+        "failure_layout_revisions": failures.layout_revisions(),
+        "gds_sha256": _file_digest(gds_path),
         "failures_simulated": failures.simulated,
         "failure_source": failures.source,
         "failure_notes": failures.notes,

@@ -29,6 +29,11 @@ layout:
   # wrong makes a fill edge look like a minimum-width routing line.
   fill_layers: {}
 
+  # The layout revision this file is. Failures carrying a different one are
+  # refused: features come from one GDS, so a failure from another revision
+  # would be scored against geometry that was not on its silicon.
+  layout_revision: null
+
   # A shape at least this wide counts as wide metal rather than routing.
   # Rabie et al. (2018) list wide-metal slotting among the layout levers.
   wide_width_um: 3.0
@@ -57,6 +62,10 @@ inspection:
   footprint:
     full_die: null
   min_coverage: 0.5         # a cell inspected less than this takes no part
+
+  # Per-die overrides, keyed by "lot_id|wafer_id|die_x|die_y". A campaign
+  # rarely inspects every die the same way; the default above covers the rest.
+  footprint_per_die: {}
 
 registration:
   # CSV with layout_x_um, layout_y_um, measured_x_um, measured_y_um.

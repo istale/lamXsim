@@ -17,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-from .labels.inspection import InspectionFootprint
+from .labels.inspection import FootprintSet, InspectionFootprint
 from .labels.package_context import PackageLayers
 from .layout.reader import BBox, LayerSpec, LayoutReader
 
@@ -44,9 +44,11 @@ class StudyManifest:
     line_rules: dict[str, LineRule] = field(default_factory=dict)
     fill_layers: dict[str, LayerSpec] = field(default_factory=dict)
     wide_width_um: float = 3.0
+    layout_revision: str | None = None
     top_cell: str | None = None
     die_outline_um: list[float] | None = None
     footprint_spec: dict = field(default_factory=dict)
+    footprint_per_die: dict = field(default_factory=dict)
     min_coverage: float = 0.5
     fiducials: str | None = None
     allow_reflection: bool = True
@@ -104,6 +106,10 @@ class StudyManifest:
                 "no fill_layers: dummy fill cannot be separated from functional "
                 "geometry, so it contributes to every density and sets the "
                 "shortest edge on the layer")
+        if not layout.get("layout_revision"):
+            gaps.append(
+                "no layout_revision: nothing checks that every die analysed "
+                "was built from the layout in this file")
         if not reg.get("fiducials"):
             gaps.append(
                 "no registration fiducials: positional uncertainty must come "
@@ -117,10 +123,12 @@ class StudyManifest:
             fill_layers={k: _spec(v) for k, v in
                          (layout.get("fill_layers") or {}).items() if v},
             wide_width_um=float(layout.get("wide_width_um", 3.0)),
+            layout_revision=layout.get("layout_revision"),
             package_layers=package, line_rules=rules,
             top_cell=layout.get("top_cell"),
             die_outline_um=layout.get("die_outline_um"),
             footprint_spec=inspect.get("footprint") or {},
+            footprint_per_die=inspect.get("footprint_per_die") or {},
             min_coverage=float(inspect.get("min_coverage", 0.5)),
             fiducials=reg.get("fiducials"),
             allow_reflection=bool(reg.get("allow_reflection", True)),
@@ -168,6 +176,31 @@ class StudyManifest:
                                                 dbu=reader.units.dbu)
         return None
 
+    def footprint_set(self, reader: LayoutReader, bbox: BBox) -> FootprintSet:
+        """Default footprint plus any per-die overrides.
+
+        A campaign rarely inspects every die the same way, and collapsing that
+        to one footprint either discards the dies inspected more thoroughly or
+        credits the ones inspected less with controls nobody earned.
+        """
+        per_die = {}
+        for key, spec in (self.footprint_per_die or {}).items():
+            per_die[str(key)] = self._one_footprint(reader, bbox, spec)
+        return FootprintSet(default=self.footprint(reader, bbox),
+                            per_die=per_die)
+
+    def _one_footprint(self, reader, bbox, spec) -> InspectionFootprint:
+        if spec.get("gds_layer"):
+            return InspectionFootprint.from_gds_layer(reader, _spec(spec["gds_layer"]))
+        if spec.get("rectangles"):
+            return InspectionFootprint.from_rectangles(
+                spec["rectangles"], dbu=reader.units.dbu,
+                source="manifest_rectangles")
+        if spec.get("full_die"):
+            return InspectionFootprint.full_die(bbox, str(spec["full_die"]),
+                                                dbu=reader.units.dbu)
+        raise ValueError(f"unrecognised footprint specification: {spec}")
+
     def line_end_w_max_um(self) -> float | None:
         """Single fallback cutoff, for callers that cannot take per-layer rules.
 
@@ -191,11 +224,13 @@ class StudyManifest:
             "via_layers": {k: str(v) for k, v in self.via_layers.items()},
             "fill_layers": {k: str(v) for k, v in self.fill_layers.items()},
             "wide_width_um": self.wide_width_um,
+            "layout_revision": self.layout_revision,
             "package_layers": {k: (str(v) if v else None)
                                for k, v in vars(self.package_layers).items()},
             "line_rules": {k: vars(v) for k, v in self.line_rules.items()},
             "die_outline_um": self.die_outline_um,
             "min_coverage": self.min_coverage,
+            "footprint_per_die": sorted(self.footprint_per_die or {}),
             "scales_um": list(self.scales_um),
             "pair_selection": self.pair_selection,
             "enforce_scale_gate": self.enforce_scale_gate,
