@@ -1,4 +1,4 @@
-# Literature Foundation — delamXim GDS Delamination Correlation Engine
+# Literature Foundation — lamXsim GDS Delamination Correlation Engine
 
 Generated 2026-08-29. Availability verified against OpenAlex, Unpaywall and
 Semantic Scholar. **No paywall was circumvented.**

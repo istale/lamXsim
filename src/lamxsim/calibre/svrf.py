@@ -64,7 +64,7 @@ class CalibreLayer:
 
 def _header(layers, scales_um, step_ratio) -> str:
     return f"""// ---------------------------------------------------------------
-// delamXim layout feature extraction -- generated SVRF
+// lamXsim layout feature extraction -- generated SVRF
 //
 // Produces per-window spatial features for the GDS -> delamination
 // correlation study. Calibre measures geometry; gradients, cross-layer

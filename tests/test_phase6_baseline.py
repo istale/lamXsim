@@ -2,14 +2,14 @@
 import numpy as np
 import pytest
 
-from delamxim import pipeline
-from delamxim.features.geometry import GeometryExtractor
-from delamxim.features.grid import build_grid
-from delamxim.labels.simulate import failures_from_driver, uniform_failures
-from delamxim.layout.reader import BBox, LayerSpec, LayoutReader
-from delamxim.layout.synth import validation_die
-from delamxim.stats import ablation
-from delamxim.stats.cv import (Fold, block_folds, buffered_block_folds,
+from lamxsim import pipeline
+from lamxsim.features.geometry import GeometryExtractor
+from lamxsim.features.grid import build_grid
+from lamxsim.labels.simulate import failures_from_driver, uniform_failures
+from lamxsim.layout.reader import BBox, LayerSpec, LayoutReader
+from lamxsim.layout.synth import validation_die
+from lamxsim.stats import ablation
+from lamxsim.stats.cv import (Fold, block_folds, buffered_block_folds,
                                grouped_folds, leakage_report)
 
 M8 = LayerSpec("M8", 8, 0)

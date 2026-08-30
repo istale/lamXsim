@@ -1,9 +1,9 @@
 """Window-local perimeter must count metal boundary only, not the window cut."""
 import pytest
 
-from delamxim.features.geometry import GeometryExtractor
-from delamxim.layout import synth
-from delamxim.layout.reader import LayerSpec, LayoutReader
+from lamxsim.features.geometry import GeometryExtractor
+from lamxsim.layout import synth
+from lamxsim.layout.reader import LayerSpec, LayoutReader
 
 M8 = LayerSpec("M8", 8, 0)
 

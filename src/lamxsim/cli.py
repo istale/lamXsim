@@ -1,8 +1,8 @@
 """Command line entry points.
 
-    python -m delamxim phase0      feasibility: how much failure data is needed
-    python -m delamxim thinslice   end-to-end run on the synthetic validation die
-    python -m delamxim run         end-to-end run on a real layout + failure CSV
+    python -m lamxsim phase0      feasibility: how much failure data is needed
+    python -m lamxsim thinslice   end-to-end run on the synthetic validation die
+    python -m lamxsim run         end-to-end run on a real layout + failure CSV
 """
 from __future__ import annotations
 
@@ -246,7 +246,7 @@ def cmd_phase6(args) -> int:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="delamxim")
+    ap = argparse.ArgumentParser(prog="lamxsim")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p0 = sub.add_parser("phase0", help="feasibility / required sample size")

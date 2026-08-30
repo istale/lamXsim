@@ -7,9 +7,9 @@ that property while agreeing on density.
 import numpy as np
 import pytest
 
-from delamxim.features.geometry import GeometryExtractor
-from delamxim.layout import synth
-from delamxim.layout.reader import LayerSpec, LayoutReader
+from lamxsim.features.geometry import GeometryExtractor
+from lamxsim.layout import synth
+from lamxsim.layout.reader import LayerSpec, LayoutReader
 
 M8 = LayerSpec("M8", 8, 0)
 M7 = LayerSpec("M7", 7, 0)

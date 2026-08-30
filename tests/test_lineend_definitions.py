@@ -8,9 +8,9 @@ construction; a definition is judged by how exactly it recovers those counts.
 import numpy as np
 import pytest
 
-from delamxim.features import lineends
-from delamxim.layout import synth
-from delamxim.layout.reader import LayerSpec, LayoutReader
+from lamxsim.features import lineends
+from lamxsim.layout import synth
+from lamxsim.layout.reader import LayerSpec, LayoutReader
 
 DBU = 0.001
 M = LayerSpec("M", 8, 0)

@@ -8,12 +8,12 @@ fails them.
 import numpy as np
 import pytest
 
-from delamxim import pipeline
-from delamxim.features.geometry import GeometryExtractor
-from delamxim.features.grid import build_grid
-from delamxim.labels.simulate import failures_from_driver, uniform_failures
-from delamxim.layout.reader import LayerSpec, LayoutReader
-from delamxim.layout.synth import validation_die
+from lamxsim import pipeline
+from lamxsim.features.geometry import GeometryExtractor
+from lamxsim.features.grid import build_grid
+from lamxsim.labels.simulate import failures_from_driver, uniform_failures
+from lamxsim.layout.reader import LayerSpec, LayoutReader
+from lamxsim.layout.synth import validation_die
 
 M8 = LayerSpec("M8", 8, 0)
 SCALES = (50, 100, 250)

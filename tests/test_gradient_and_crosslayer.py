@@ -8,16 +8,16 @@ import numpy as np
 import pytest
 from scipy import stats
 
-from delamxim import pipeline
-from delamxim.features.crosslayer import LayerStack, extract as xl_extract
-from delamxim.features.geometry import GeometryExtractor
-from delamxim.features.gradient import gradients, interior_mask
-from delamxim.features.grid import build_grid
-from delamxim.features.orientation import OrientationExtractor
-from delamxim.labels import position
-from delamxim.labels.simulate import failures_from_driver
-from delamxim.layout import synth
-from delamxim.layout.reader import BBox, LayerSpec, LayoutReader
+from lamxsim import pipeline
+from lamxsim.features.crosslayer import LayerStack, extract as xl_extract
+from lamxsim.features.geometry import GeometryExtractor
+from lamxsim.features.gradient import gradients, interior_mask
+from lamxsim.features.grid import build_grid
+from lamxsim.features.orientation import OrientationExtractor
+from lamxsim.labels import position
+from lamxsim.labels.simulate import failures_from_driver
+from lamxsim.layout import synth
+from lamxsim.layout.reader import BBox, LayerSpec, LayoutReader
 
 M8 = LayerSpec("M8", 8, 0)
 M7 = LayerSpec("M7", 7, 0)

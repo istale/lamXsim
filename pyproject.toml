@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "delamxim"
+name = "lamxsim"
 version = "0.1.0"
 description = "GDS spatial delamination correlation engine (Phase 0 + thin vertical slice)"
 requires-python = ">=3.10"
@@ -21,7 +21,7 @@ dependencies = [
 dev = ["pytest>=7"]
 
 [project.scripts]
-delamxim = "delamxim.cli:main"
+lamxsim = "lamxsim.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

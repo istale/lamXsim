@@ -1,4 +1,4 @@
-# delamXim — GDS Spatial Delamination Correlation Engine
+# lamXsim — GDS Spatial Delamination Correlation Engine
 
 **Status: Phase 0 + thin vertical slice.** One layer, two features, full
 statistical pipeline, validated end to end against ground truth. Not a
@@ -16,11 +16,11 @@ catalogue is a mechanical extension of something already proven to work.
 ## Quick start
 
 ```bash
-PYTHONPATH=src python3 -m delamxim phase0
+PYTHONPATH=src python3 -m lamxsim phase0
 ```
 
 ```bash
-PYTHONPATH=src python3 -m delamxim thinslice --outdir results
+PYTHONPATH=src python3 -m lamxsim thinslice --outdir results
 ```
 
 ```bash
@@ -106,11 +106,11 @@ pair separates properly:
 
 Spec section 10 assumes failures have already been brought into layout
 coordinates. That is a fitted transform with its own uncertainty, and the
-uncertainty decides which analysis scales mean anything, so `delamxim register`
+uncertainty decides which analysis scales mean anything, so `lamxsim register`
 fits it and reports the floor.
 
 ```bash
-PYTHONPATH=src python3 -m delamxim register fiducials.csv
+PYTHONPATH=src python3 -m lamxsim register fiducials.csv
 ```
 
 **The residual of a fit is not the accuracy of the mapping.** Each fiducial
@@ -154,7 +154,7 @@ mis-identified mark, that took the floor from 191 um to 19 um.
 ## Phase 6: does geometry add anything?
 
 ```bash
-PYTHONPATH=src python3 -m delamxim phase6 --outdir results
+PYTHONPATH=src python3 -m lamxsim phase6 --outdir results
 ```
 
 **Spatial separation first.** Blocking alone does not separate train from test:
@@ -292,7 +292,7 @@ rides the native scanner:
 METAL -> marker layer -> DENSITY WINDOW/STEP -> per-window value -> Python
 ```
 
-`delamxim.calibre.svrf` generates the decks; `delamxim.calibre.ingest` reads
+`lamxsim.calibre.svrf` generates the decks; `lamxsim.calibre.ingest` reads
 the results back onto the same grid the KLayout path uses, so the two are
 interchangeable downstream. Three findings from measuring the approximation
 against exact edge lengths are built in.
@@ -366,7 +366,7 @@ per layer, never pooled as magnitude.
 ## Layout
 
 ```
-src/delamxim/
+src/lamxsim/
   evidence.py            evidence classes (spec section 30) + mixing guard
   units.py               dbu <-> um, isolated at the layout boundary
   pipeline.py            thin slice: layout -> features -> labels -> association

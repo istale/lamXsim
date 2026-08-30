@@ -9,10 +9,10 @@ assumption fails here rather than silently in a full-chip run.
 import klayout.db as db
 import pytest
 
-from delamxim.calibre.svrf import EPS_WIDTH_FRACTION, CalibreLayer
-from delamxim.features import corners
-from delamxim.layout import synth
-from delamxim.layout.reader import LayerSpec, LayoutReader
+from lamxsim.calibre.svrf import EPS_WIDTH_FRACTION, CalibreLayer
+from lamxsim.features import corners
+from lamxsim.layout import synth
+from lamxsim.layout.reader import LayerSpec, LayoutReader
 
 DBU = 0.001
 M = LayerSpec("M", 8, 0)
