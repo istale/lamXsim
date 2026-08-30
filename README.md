@@ -194,6 +194,22 @@ sign disagreement first, because a feature pointing one way on one mechanism
 and the other way on another is not one effect measured twice — and telling
 those apart is what separates a mechanism from a proxy for one.
 
+## What a primary claim rests on
+
+The pipeline computed a within-die block permutation and then corrected the
+Mann-Whitney p-value instead, leaving the spatial result in a side table. With
+`n_permutations: 0` the primary table still produced FDR q-values — so the
+spatial null was not a precondition for a finding, in a repository whose own
+README shows that test calling 11 of 12 position associations significant
+where the permutation called none.
+
+`spatial_q_value` now comes from the block permutation and is what a primary
+row rests on; `fdr_q_value` is kept as the naive diagnostic and the contrast.
+They differ materially: on the validation die `perimeter_density` moves from
+q = 0.00000 to **q = 0.01524**, three orders of magnitude weaker and the
+honest number. Without permutations there is no primary evidence at all — the
+rows land in `not_spatially_corrected` and the run says why.
+
 ## Traceability is enforced, not requested
 
 `references/feature_evidence_map.csv` carries, per feature family, the
@@ -203,9 +219,19 @@ falsification condition, where it is implemented, whether it is primary or
 exploratory, and what further evidence would promote it from an association to
 an engineering rule.
 
-Every feature the pipeline reports is matched against that registry, and one
-with no entry is named in the run metadata. A checklist nothing enforces is a
-wish: the check found four families added two commits earlier that had none.
+Every feature the pipeline reports is matched against that registry, and a
+feature whose entry is missing or incomplete **cannot be a primary result** --
+it lands in `not_traceable`. Auditing a gap and printing the row anyway is not
+enforcement. The check found four families added two commits earlier that had
+no entry at all.
+
+Package and process conditions get the same treatment from the other side.
+EMC thickness, underfill CTE and modulus, reflow and thermal-cycle profile,
+the dielectric stack, inspection method and sensitivity — none is in the GDS,
+and the literature shows each changing the crack driving force. The manifest
+requires every one to be declared fixed, stratified, or a baseline covariate;
+anything left out is reported as an undeclared condition. The software cannot
+check these, only refuse to let them go unmade.
 
 ## One population per die, and one layout for all of them
 
@@ -614,6 +640,21 @@ they are the lowest-value additions. Sections 19-23 (ConvNeXt, VLM, hotspot
 generation, GDS back-annotation) stay closed until a real study shows
 deterministic geometry carries signal. An effective-stiffness proxy was
 evaluated and rejected as provably redundant -- see above.
+
+## Reproducing the test result
+
+`pyproject.toml` declares the bounds; `constraints-verified.txt` records the
+versions the suite has actually been run against.
+
+```bash
+pip install -e . -c constraints-verified.txt && python -m pytest tests -q
+```
+
+A clean install used to fail at collection: the multivariate baseline and the
+ablation import scikit-learn, which was never declared, and `ndarray.ptp()`
+was removed in NumPy 2.0 — reached by every synthetic die, so one line
+cascaded into dozens of errors. Both are fixed, and the numbers quoted here
+belong to the pinned environment rather than to whatever a resolver picks.
 
 ## What GDS cannot answer
 

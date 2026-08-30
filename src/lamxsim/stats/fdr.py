@@ -30,10 +30,26 @@ def benjamini_hochberg(p: np.ndarray) -> np.ndarray:
 
 
 def apply_tiered(associations, primary_tiers=("tier1", "tier1_confounder")):
-    """Set fdr_q_value on primary-tier rows; leave exploratory rows as NaN."""
+    """Correct the primary-tier rows, on both p-values, keeping them apart.
+
+    ``spatial_q_value`` comes from the within-die block permutation and is what
+    a primary claim rests on. ``fdr_q_value`` comes from Mann-Whitney, which
+    assumes grid cells are independent observations -- on a die with no
+    package-position effect that test called 11 of 12 position associations
+    significant where the permutation called none. It is retained as a
+    descriptive diagnostic and as the contrast that shows what the spatial
+    correction is doing, never as the basis of a finding.
+
+    Exploratory rows get neither: correcting them alongside the primary ones
+    is what makes the primary ones unreachable.
+    """
     prim = [a for a in associations if a.hypothesis_tier in primary_tiers]
-    if prim:
-        q = benjamini_hochberg(np.array([a.p_value for a in prim]))
+    if not prim:
+        return associations
+
+    for source, target in (("p_value", "fdr_q_value"),
+                           ("spatial_p_value", "spatial_q_value")):
+        q = benjamini_hochberg(np.array([getattr(a, source) for a in prim]))
         for a, qq in zip(prim, q):
-            a.fdr_q_value = float(qq)
+            setattr(a, target, float(qq))
     return associations

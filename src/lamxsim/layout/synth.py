@@ -212,7 +212,10 @@ def _smooth_field(rng, n: int, blob: int, lo: float, hi: float):
     top = c[y0][:, x0] * (1 - fx) + c[y0][:, x0 + 1] * fx
     bot = c[y0 + 1][:, x0] * (1 - fx) + c[y0 + 1][:, x0 + 1] * fx
     f = top * (1 - fy) + bot * fy
-    f = (f - f.min()) / max(f.ptp(), 1e-12)
+    # np.ptp(f), not f.ptp(): the method was removed from ndarray in NumPy 2.0
+    # and this line is reached by every synthetic die, so the failure cascades
+    # through the whole suite rather than showing up as one broken feature.
+    f = (f - f.min()) / max(float(np.ptp(f)), 1e-12)
     return lo + f * (hi - lo)
 
 

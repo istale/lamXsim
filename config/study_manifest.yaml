@@ -83,3 +83,20 @@ analysis:
   # Scales below 3x the positional uncertainty are excluded from primary
   # results rather than reported with a caveat.
   enforce_scale_gate: true
+
+# Package and process conditions. None of these is in the GDS, and the
+# literature shows each of them changing the crack driving force -- Li et al.
+# (2023, 2025) vary EMC thickness, underfill CTE and the PI opening;
+# Zahedmanesh & Vanstreels (2019) make the whole result depend on material
+# stiffness. If one varies across the samples in a study and is not handled,
+# an apparent geometry effect may be standing in for it.
+#
+# Declare each as fixed (with its value), stratified, or a baseline covariate.
+# Anything left out is reported as an undeclared condition, which is a stated
+# limitation rather than an absence of one. The software cannot check these --
+# only refuse to let them go unmade.
+sample_conditions:
+  fixed: {}          # e.g. {emc_thickness_um: 400, package_type: FCCSP}
+  stratified: []     # e.g. [thermal_cycle_condition]
+  covariate: []      # e.g. [underfill_cte_ppm_k]
+

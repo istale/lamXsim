@@ -29,6 +29,58 @@ def _spec(entry) -> LayerSpec | None:
                      int(entry.get("datatype", 0)))
 
 
+#: Conditions the literature shows change the energy release rate and which no
+#: GDS contains. Li et al. (2023, 2025) vary EMC thickness, underfill CTE and
+#: the PI opening; Zahedmanesh & Vanstreels (2019) make the result depend on
+#: material stiffness throughout. If any of these varies across the samples in
+#: a study, an apparent geometry effect may be standing in for the variation.
+PACKAGE_PROCESS_CONDITIONS = (
+    "emc_thickness_um", "underfill_cte_ppm_k", "underfill_modulus_gpa",
+    "underfill_tg_c", "reflow_profile", "thermal_cycle_condition",
+    "dielectric_stack", "bump_material", "package_type",
+    "inspection_method", "inspection_sensitivity_um",
+)
+
+
+@dataclass
+class SampleConditions:
+    """How each package/process condition is being handled.
+
+    Every condition must be one of:
+
+    * ``fixed`` -- held constant across the study, with the value recorded;
+    * ``stratified`` -- varies, and the analysis is split on it;
+    * ``covariate`` -- varies, and it enters the baseline model;
+    * ``unknown`` -- not recorded, which is a stated limitation rather than an
+      absence of one.
+
+    Nothing here can be measured from the layout, so the software cannot
+    check the declarations -- only refuse to let them go unmade.
+    """
+    fixed: dict = field(default_factory=dict)
+    stratified: tuple = ()
+    covariate: tuple = ()
+
+    def status(self, condition: str) -> str:
+        if condition in self.fixed:
+            return "fixed"
+        if condition in self.stratified:
+            return "stratified"
+        if condition in self.covariate:
+            return "covariate"
+        return "unknown"
+
+    def undeclared(self) -> list[str]:
+        return [c for c in PACKAGE_PROCESS_CONDITIONS
+                if self.status(c) == "unknown"]
+
+    def report(self) -> dict:
+        return {"by_condition": {c: self.status(c)
+                                 for c in PACKAGE_PROCESS_CONDITIONS},
+                "fixed_values": dict(self.fixed),
+                "undeclared": self.undeclared()}
+
+
 @dataclass
 class LineRule:
     """Per-layer routing widths, from the PDK rather than from the geometry."""
@@ -45,6 +97,11 @@ class StudyManifest:
     fill_layers: dict[str, LayerSpec] = field(default_factory=dict)
     wide_width_um: float = 3.0
     layout_revision: str | None = None
+    #: Sample conditions that change the crack driving force and cannot be
+    #: recovered from GDS. Declared as fixed, stratified, or a baseline
+    #: covariate -- see :class:`SampleConditions`.
+    sample_conditions: "SampleConditions" = field(
+        default_factory=lambda: SampleConditions())
     top_cell: str | None = None
     die_outline_um: list[float] | None = None
     footprint_spec: dict = field(default_factory=dict)
@@ -110,6 +167,18 @@ class StudyManifest:
             gaps.append(
                 "no layout_revision: nothing checks that every die analysed "
                 "was built from the layout in this file")
+        undeclared = SampleConditions(
+            fixed=dict((cfg.get("sample_conditions") or {}).get("fixed") or {}),
+            stratified=tuple((cfg.get("sample_conditions") or {}).get("stratified") or ()),
+            covariate=tuple((cfg.get("sample_conditions") or {}).get("covariate") or ()),
+        ).undeclared()
+        if undeclared:
+            gaps.append(
+                f"{len(undeclared)} package/process condition(s) undeclared "
+                f"({', '.join(undeclared[:4])}"
+                f"{'...' if len(undeclared) > 4 else ''}): none can be read "
+                "from GDS, and if any varies across the study an apparent "
+                "geometry effect may be standing in for it")
         if not reg.get("fiducials"):
             gaps.append(
                 "no registration fiducials: positional uncertainty must come "
@@ -124,6 +193,10 @@ class StudyManifest:
                          (layout.get("fill_layers") or {}).items() if v},
             wide_width_um=float(layout.get("wide_width_um", 3.0)),
             layout_revision=layout.get("layout_revision"),
+            sample_conditions=SampleConditions(
+                fixed=dict((cfg.get("sample_conditions") or {}).get("fixed") or {}),
+                stratified=tuple((cfg.get("sample_conditions") or {}).get("stratified") or ()),
+                covariate=tuple((cfg.get("sample_conditions") or {}).get("covariate") or ())),
             package_layers=package, line_rules=rules,
             top_cell=layout.get("top_cell"),
             die_outline_um=layout.get("die_outline_um"),
@@ -225,6 +298,7 @@ class StudyManifest:
             "fill_layers": {k: str(v) for k, v in self.fill_layers.items()},
             "wide_width_um": self.wide_width_um,
             "layout_revision": self.layout_revision,
+            "sample_conditions": self.sample_conditions.report(),
             "package_layers": {k: (str(v) if v else None)
                                for k, v in vars(self.package_layers).items()},
             "line_rules": {k: vars(v) for k, v in self.line_rules.items()},

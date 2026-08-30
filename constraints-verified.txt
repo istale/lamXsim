@@ -1,0 +1,17 @@
+# The exact versions this suite has been run against end to end.
+#
+# The bounds in pyproject.toml say what should work; this file says what was
+# actually verified. A clean install resolving outside it may still pass, but
+# nothing here has shown that it does -- reproduce the README's numbers with
+# these first, then widen.
+#
+#   pip install -e . -c constraints-verified.txt
+numpy==1.26.4
+scipy==1.17.1
+pandas==3.0.3
+pyarrow==24.0.0
+klayout==0.30.5
+scikit-learn==1.9.0
+pyyaml==6.0.2
+matplotlib==3.10.0
+pytest==8.3.4

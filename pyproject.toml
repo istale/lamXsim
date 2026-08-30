@@ -8,11 +8,15 @@ version = "0.1.0"
 description = "GDS spatial delamination correlation engine (Phase 0 + thin vertical slice)"
 requires-python = ">=3.10"
 dependencies = [
-  "numpy>=1.24",
+  "numpy>=1.24,<3",
   "scipy>=1.10",
   "pandas>=2.0",
   "pyarrow>=12",
   "klayout>=0.29",
+  # The multivariate baseline and the feature ablation are part of the
+  # pipeline, not an optional extra, so scikit-learn is a runtime dependency.
+  # It was missing, and a clean install failed at test collection.
+  "scikit-learn>=1.3",
   "pyyaml>=6",
   "matplotlib>=3.7",
 ]
@@ -28,3 +32,15 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Versions this suite has actually been run against. The upper bounds above
+# are declared rather than verified here: reproduce with these to get the
+# result the README quotes, and widen them only with a green run to show for
+# it.
+[tool.lamxsim.verified-environment]
+python = "3.12.8"
+numpy = "1.26.4"
+scipy = "1.17.1"
+pandas = "3.0.3"
+klayout = "0.30.5"
+scikit-learn = "1.9.0"

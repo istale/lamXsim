@@ -24,6 +24,7 @@ from .layout.reader import LayerSpec, LayoutReader
 from .layout.synth import validation_die
 from .registration.apply import load_fiducials, scale_gate
 from .registration.fit import robust_fit
+from . import report as report_mod
 from .study import StudyManifest
 from .stats import ablation, power
 from .stats.cv import buffered_block_folds, grouped_folds, leakage_report
@@ -217,8 +218,23 @@ def cmd_run(args) -> int:
         strat = pipeline.run_stratified(
             args.gds, failures, stratify_by=tuple(args.stratify_by),
             min_failures=args.min_stratum_failures, **run_kwargs)
+        out = Path(args.outdir)
+        out.mkdir(parents=True, exist_ok=True)
+
         print(f"\nstratified by {list(args.stratify_by)}: "
               f"{len(strat)} population(s) analysed")
+        if not strat.per_stratum:
+            print("  every stratum fell below "
+                  f"--min-stratum-failures={args.min_stratum_failures}; "
+                  "nothing was analysed. Lower the threshold or pool "
+                  "deliberately with --allow-pooling-modes.")
+            (out / "stratification_metadata.json").write_text(json.dumps({
+                "stratify_by": list(args.stratify_by),
+                "min_stratum_failures": args.min_stratum_failures,
+                "strata_analysed": [], "manifest": manifest.report(),
+            }, indent=2, default=str))
+            return 1
+
         if not strat.consistency.empty:
             disagree = strat.consistency[~strat.consistency.signs_agree]
             print(f"  features whose effect reverses between strata: "
@@ -227,16 +243,40 @@ def cmd_run(args) -> int:
                 print("  (pooling these would cancel two real effects into none)")
                 print(disagree[["feature", "layer", "scale_um", "strata"]]
                       .head(8).to_string(index=False))
-        out = Path(args.outdir) / "reports"
-        out.mkdir(parents=True, exist_ok=True)
-        strat.consistency.to_csv(out / "stratum_consistency.csv", index=False)
+            strat.consistency.to_csv(out / "stratum_consistency.csv", index=False)
+
+        # No root primary table. Each mechanism is its own study, and a root
+        # result would be read as the overall one while being whichever
+        # stratum happened to come first.
+        written = {}
         for name, sub in strat.per_stratum.items():
-            safe = re.sub(r"\W+", "_", name)
             sub.metadata["manifest"] = manifest.report()
-            pipeline.write_results(sub, Path(args.outdir) / f"stratum_{safe}")
-        res = next(iter(strat.per_stratum.values()))
-    else:
-        res = pipeline.run(args.gds, failures, **run_kwargs)
+            if registration_report is not None:
+                sub.metadata["registration"] = registration_report
+            safe = re.sub(r"\W+", "_", name).strip("_") or "unnamed"
+            target = out / f"stratum_{safe}"
+            if target in written.values():          # sanitisation collision
+                target = out / f"stratum_{safe}_{len(written)}"
+            written[name] = target
+            pipeline.write_results(sub, target)
+            print(f"\n=== {name}: primary results ===")
+            print(report_mod.format_primary(sub.associations, limit=6))
+
+        (out / "stratification_metadata.json").write_text(json.dumps({
+            "stratify_by": list(args.stratify_by),
+            "min_stratum_failures": args.min_stratum_failures,
+            "strata_analysed": sorted(strat.per_stratum),
+            "strata_skipped_for_size": next(
+                iter(strat.per_stratum.values())
+            ).metadata.get("strata_skipped_for_size", {}),
+            "output_directories": {k: str(v) for k, v in written.items()},
+            "manifest": manifest.report(),
+        }, indent=2, default=str))
+        print(f"\nwritten: {out / 'stratification_metadata.json'}, "
+              f"{out / 'stratum_consistency.csv'}, and one directory per stratum")
+        return 0
+
+    res = pipeline.run(args.gds, failures, **run_kwargs)
     res.metadata["manifest"] = manifest.report()
     if registration_report is not None:
         res.metadata["registration"] = registration_report
@@ -306,7 +346,6 @@ def cmd_run(args) -> int:
             deltas.to_csv(out / "ablation_deltas.csv", index=False)
             res.metadata["ablation_cv"] = leak
 
-    from . import report as report_mod
     print("\n=== primary results ===")
     print("(literature-backed geometry, FDR-corrected, at a scale the "
           "registration supports, with both classes populated)")

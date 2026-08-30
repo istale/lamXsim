@@ -458,6 +458,11 @@ def run(gds_path: str, failures: FailureSet, *,
                     vals, y, grid, n_permutations=n_permutations, seed=seed,
                     mask=finite, groups=obs_groups, block_cells=block_size,
                     strata=die_index)
+                # The spatial p-value goes onto the association itself, not
+                # only into a side table. A primary claim is corrected from
+                # it; leaving it in a separate file let the naive test decide
+                # what counted as significant.
+                a.spatial_p_value = pr.p_value
                 p = pr.as_row()
                 p.update(feature=name, layer=layer_name, scale_um=scale)
                 perm_rows.append(p)
@@ -478,7 +483,16 @@ def run(gds_path: str, failures: FailureSet, *,
     rows = []
     for a, row in assoc_rows:
         row["fdr_q_value"] = a.fdr_q_value
+        row["spatial_p_value"] = a.spatial_p_value
+        row["spatial_q_value"] = a.spatial_q_value
         rows.append(row)
+
+    if not n_permutations:
+        context_notes.append(
+            "no spatial permutation was run (n_permutations=0), so no result "
+            "can be primary evidence. The Mann-Whitney q-values in the table "
+            "assume grid cells are independent observations, which on spatial "
+            "data produces false positives in quantity.")
 
     meta = {
         "gds_path": str(gds_path),

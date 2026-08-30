@@ -41,7 +41,13 @@ class Association:
     effective_n: float
     auc_ci_low: float = float("nan")
     auc_ci_high: float = float("nan")
+    #: Mann-Whitney, which assumes independent observations. Kept as a
+    #: descriptive diagnostic; it is not what a primary claim rests on.
     fdr_q_value: float = float("nan")
+    #: Block permutation within a die, which preserves the spatial structure.
+    #: This is the p-value a primary result is corrected from.
+    spatial_p_value: float = float("nan")
+    spatial_q_value: float = float("nan")
     hypothesis_tier: str = "exploratory"
 
     def as_row(self) -> dict:

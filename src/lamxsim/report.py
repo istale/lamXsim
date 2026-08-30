@@ -16,8 +16,17 @@ that decide what a row may be used for:
   what makes the primary ones unreachable.
 * **scale trustworthiness** -- a scale below roughly three times the
   positional uncertainty measures registration noise.
+* **a spatially corrected q-value** -- a row whose significance rests on a
+  test that assumed grid cells are independent has not been corrected for the
+  thing most likely to have produced it. On a die with no package-position
+  effect that test called 11 of 12 position associations significant where the
+  block permutation called none.
+* **a complete registry entry** -- a feature with no stated physical
+  hypothesis, no named discrimination test and no falsification condition can
+  be reported, but not as a primary finding. Auditing that and then printing
+  the row anyway is not enforcement.
 
-Only rows that clear all three appear in the primary table.
+Only rows that clear all five appear in the primary table.
 """
 from __future__ import annotations
 
@@ -25,6 +34,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from . import registry
 
 PRIMARY_TIERS = ("tier1",)
 CONFOUNDER_TIERS = ("tier1_confounder",)
@@ -35,6 +46,12 @@ CONFOUNDER_TIERS = ("tier1_confounder",)
 #: width, and ranking by effect size alone puts that degenerate row above a
 #: real, well-powered one.
 MIN_CLASS_SIZE = 10
+
+
+def _is_traced(feature: str) -> bool:
+    """Whether the feature has a complete registry entry behind it."""
+    entry = registry.lookup(feature)
+    return entry is not None and not entry.missing_trace
 
 
 def _reasons(row) -> list[str]:
@@ -55,8 +72,8 @@ def partition(associations: pd.DataFrame) -> dict[str, pd.DataFrame]:
     if associations.empty:
         empty = associations.copy()
         return {k: empty.copy() for k in
-                ("primary", "confounders", "exploratory",
-                 "unsupported_scale", "underpowered")}
+                ("primary", "confounders", "exploratory", "unsupported_scale",
+                 "underpowered", "not_spatially_corrected", "not_traceable")}
 
     df = associations.copy()
     df["abs_effect"] = df["effect_size"].abs()
@@ -75,14 +92,28 @@ def partition(associations: pd.DataFrame) -> dict[str, pd.DataFrame]:
     is_primary_tier = df["hypothesis_tier"].isin(PRIMARY_TIERS)
     powered = ((df.get("n_case", 0) >= MIN_CLASS_SIZE)
                & (df.get("n_control", 0) >= MIN_CLASS_SIZE))
+    # A primary claim is corrected from the within-die block permutation. Where
+    # that was not run there is no primary evidence, only a naive diagnostic.
+    if "spatial_q_value" in df.columns:
+        spatially_corrected = df["spatial_q_value"].notna()
+    else:
+        spatially_corrected = pd.Series(False, index=df.index)
 
-    primary = df[is_geometry & is_primary_tier & ok_scale & powered]
+    traced = df["feature"].map(_is_traced) if "feature" in df.columns \
+        else pd.Series(True, index=df.index)
+
+    primary = df[is_geometry & is_primary_tier & ok_scale & powered
+                 & spatially_corrected & traced]
     confounders = df[df["hypothesis_tier"].isin(CONFOUNDER_TIERS)]
     unsupported = df[~ok_scale]
     if "scale_status" in df.columns:
         unsupported = unsupported.assign(
             excluded_because=unsupported["scale_status"])
-    underpowered = df[is_geometry & is_primary_tier & ok_scale & ~powered]
+    underpowered = df[is_geometry & is_primary_tier & ok_scale & ~powered
+                      & spatially_corrected]
+    uncorrected = df[is_geometry & is_primary_tier & ok_scale & powered
+                     & ~spatially_corrected & traced]
+    untraced = df[is_geometry & is_primary_tier & ~traced]
     exploratory = df[is_geometry & ~is_primary_tier & ok_scale & powered]
 
     # Ranked by the effect the interval actually guarantees, so a wide
@@ -93,7 +124,8 @@ def partition(associations: pd.DataFrame) -> dict[str, pd.DataFrame]:
     # that put a feature at AUC 0.512 with q = 0.94 above the driver at
     # AUC 0.698 with q = 0.0008.
     if "auc_ci_low" in df.columns and "auc_ci_high" in df.columns:
-        for t in (primary, confounders, exploratory, unsupported, underpowered):
+        for t in (primary, confounders, exploratory, unsupported,
+                  underpowered, uncorrected, untraced):
             lo, hi = t["auc_ci_low"], t["auc_ci_high"]
             guaranteed = np.where(lo > 0.5, lo - 0.5,
                                   np.where(hi < 0.5, 0.5 - hi, 0.0))
@@ -109,14 +141,16 @@ def partition(associations: pd.DataFrame) -> dict[str, pd.DataFrame]:
         "exploratory": exploratory.sort_values(order, ascending=False),
         "unsupported_scale": unsupported.sort_values(order, ascending=False),
         "underpowered": underpowered.sort_values(order, ascending=False),
+        "not_spatially_corrected": uncorrected.sort_values(order, ascending=False),
+        "not_traceable": untraced.sort_values(order, ascending=False),
     }
 
 
 #: Columns a reader needs to judge a row, in the order they should be read.
 SUMMARY_COLUMNS = ("feature", "layer", "scale_um", "scale_status",
-                   "roc_auc", "auc_ci_low",
-                   "auc_ci_high", "effect_size", "fdr_q_value", "n_case",
-                   "n_control", "effective_n", "enrichment_top_10pct")
+                   "roc_auc", "auc_ci_low", "auc_ci_high", "effect_size",
+                   "spatial_q_value", "fdr_q_value", "n_case", "n_control",
+                   "effective_n", "enrichment_top_10pct")
 
 
 def summary_table(df: pd.DataFrame) -> pd.DataFrame:
@@ -152,6 +186,17 @@ def write(associations: pd.DataFrame, outdir: str | Path, *,
         f"- underpowered       {counts['underpowered']:5d}  fewer than "
         f"{MIN_CLASS_SIZE} cells in one class, so the effect estimate is "
         "degenerate however large it looks",
+        f"- not_spatially_corrected {counts['not_spatially_corrected']:5d}  no "
+        "block-permutation q-value, so significance rests on a test that "
+        "assumed grid cells are independent",
+        f"- not_traceable      {counts['not_traceable']:5d}  no complete "
+        "registry entry: no stated physical hypothesis, discrimination test "
+        "or falsification condition",
+        "",
+        "`spatial_q_value` is the within-die block permutation, corrected. "
+        "`fdr_q_value` is Mann-Whitney, kept as a diagnostic: on a die with no "
+        "position effect it called 11 of 12 position associations significant "
+        "where the permutation called none.",
         "",
     ]
     if metadata:
