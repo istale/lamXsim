@@ -98,9 +98,10 @@ def to_grid(df: pd.DataFrame, grid: Grid, conversion: MarkerConversion,
     from its cell centre lands in the neighbouring bucket and is dropped.
 
     Unreported windows become 0.0, which is what Calibre's omission of empty
-    windows means -- but a complete failure to match is raised, so a
-    coordinate-frame mismatch surfaces as an error rather than as a map of
-    zeros that looks plausible.
+    windows means. Individual records further than the tolerance from any cell
+    are dropped, so a grid may cover a sub-region of what the deck reported;
+    a *complete* failure to match raises, so a coordinate-frame mismatch
+    surfaces as an error rather than as a map of zeros that looks plausible.
     """
     from scipy.spatial import cKDTree
 
@@ -117,10 +118,25 @@ def to_grid(df: pd.DataFrame, grid: Grid, conversion: MarkerConversion,
     matched = distance <= tol
 
     values = df["value"].to_numpy(float) * conversion.factor
-    # Later records win on a tie, matching the previous behaviour; Calibre
-    # emits one record per window, so a collision means the deck and the grid
-    # disagree about WINDOW/STEP.
-    out[index[matched]] = values[matched]
+
+    # Calibre emits one record per window, so two records claiming the same
+    # cell means the deck and the grid disagree about WINDOW/STEP. Letting the
+    # later record win would leave the other cell reading zero -- a value that
+    # is indistinguishable from an empty window.
+    hit = index[matched]
+    if len(hit) != len(np.unique(hit)):
+        cells, counts = np.unique(hit, return_counts=True)
+        clashing = cells[counts > 1]
+        example = grid.cells[int(clashing[0])]
+        raise ValueError(
+            f"{len(clashing)} grid cell(s) were claimed by more than one "
+            f"Calibre record; for example the cell centred at "
+            f"({example.x_center:g}, {example.y_center:g})um was claimed "
+            f"{int(counts[counts > 1][0])} times. Calibre emits one record per "
+            "window, so this means the deck's WINDOW/STEP does not match this "
+            f"grid (scale {grid.scale_um:g}um, stride {grid.stride_um:g}um).")
+
+    out[hit] = values[matched]
 
     if not matched.any():
         raise ValueError(

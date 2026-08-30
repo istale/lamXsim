@@ -41,7 +41,12 @@ class FailureSet:
         """Worst-case reported positional uncertainty, in um."""
         if "position_sigma_um" not in self.table:
             return float("nan")
-        return float(self.table["position_sigma_um"].max())
+        sigma = float(self.table["position_sigma_um"].max())
+        if np.isfinite(sigma) and sigma < 0:
+            raise ValueError(
+                f"position_sigma_um is negative ({sigma}); a negative "
+                "uncertainty would certify every analysis scale")
+        return sigma
 
     def min_trustworthy_scale_um(self, factor: float = 3.0) -> float:
         """Smallest analysis scale the registration accuracy can support.
@@ -54,8 +59,56 @@ class FailureSet:
         return float("nan") if np.isnan(s) else factor * s
 
 
+def _validate_values(df: pd.DataFrame, path) -> None:
+    """Reject values that would corrupt the analysis rather than fail loudly.
+
+    Each of these has a specific downstream consequence, so none is tolerated
+    and none is silently dropped -- discarding a measured failure is exactly
+    the kind of quiet loss this module exists to prevent.
+    """
+    problems: list[str] = []
+
+    for col in ("x_um", "y_um"):
+        bad = ~np.isfinite(pd.to_numeric(df[col], errors="coerce").to_numpy(float))
+        if bad.any():
+            rows = list(np.where(bad)[0][:5])
+            problems.append(
+                f"{col}: {int(bad.sum())} non-finite value(s) at row(s) {rows}. "
+                "A single NaN coordinate makes distance_to_nearest_failure NaN "
+                "for every cell on the die")
+
+    if "position_sigma_um" in df:
+        sigma = pd.to_numeric(df["position_sigma_um"], errors="coerce").to_numpy(float)
+        bad = np.isfinite(sigma) & (sigma < 0)
+        if bad.any():
+            problems.append(
+                f"position_sigma_um: {int(bad.sum())} negative value(s) at "
+                f"row(s) {list(np.where(bad)[0][:5])}. A negative uncertainty "
+                "produces a negative scale floor, which certifies every "
+                "analysis scale instead of rejecting the small ones")
+
+    if "confidence" in df:
+        conf = pd.to_numeric(df["confidence"], errors="coerce").to_numpy(float)
+        bad = np.isfinite(conf) & ((conf < 0) | (conf > 1))
+        if bad.any():
+            problems.append(
+                f"confidence: {int(bad.sum())} value(s) outside [0, 1] at "
+                f"row(s) {list(np.where(bad)[0][:5])}")
+
+    ids = df["sample_id"].astype("string")
+    bad = ids.isna() | (ids.str.strip() == "")
+    if bad.any():
+        problems.append(
+            f"sample_id: {int(bad.sum())} empty value(s) at row(s) "
+            f"{list(np.where(bad.to_numpy())[0][:5])}; a failure that cannot be "
+            "named cannot be traced back to its measurement")
+
+    if problems:
+        raise ValueError(f"{path}: " + "; ".join(problems))
+
+
 def load_failures(path: str | Path, *, require_grouping: bool = True) -> FailureSet:
-    """Read a failure CSV, validating the schema up front."""
+    """Read a failure CSV, validating both the schema and the values."""
     df = pd.read_csv(path)
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
@@ -79,6 +132,8 @@ def load_failures(path: str | Path, *, require_grouping: bool = True) -> Failure
             "position_sigma_um absent: registration accuracy unknown, so no "
             "analysis scale can be certified trustworthy"
         )
+
+    _validate_values(df, path)
     return FailureSet(table=df, source=str(path), notes=notes)
 
 
