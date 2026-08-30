@@ -41,11 +41,35 @@ layout:
   # Package context. Absent layers are recorded as uncontrolled confounding
   # rather than silently ignored -- every layout lever in Rabie et al. (2018)
   # is defined relative to bumps.
+  # A layer number is not a semantics. `polarity` says whether the polygon is
+  # the object (positive) or a hole in a film (opening); getting it backwards
+  # inverts every distance measured from that layer. It defaults to positive
+  # for bump/pad/crackstop and opening for pi_opening.
   package_layers:
-    bump: {name: BUMP, layer: 60, datatype: 0}
+    bump: {name: BUMP, layer: 60, datatype: 0, polarity: positive}
     pad: null
-    pi_opening: {name: PI, layer: 61, datatype: 0}
-    crackstop: {name: CS, layer: 62, datatype: 0}
+    pi_opening: {name: PI, layer: 61, datatype: 0, polarity: opening}
+    crackstop: {name: CS, layer: 62, datatype: 0, polarity: positive}
+
+  # How a pad is attached to its bump, and an opening to its pad. The three
+  # rules disagree exactly where the layout is interesting -- an offset pad, a
+  # missing bump, one bump serving two pads -- so this is declared, not
+  # guessed. One of: containment, nearest, one_to_one.
+  object_matching: containment
+  # match_tolerance_um: 50.0        # for nearest / one_to_one
+
+  # The shape a recommendation is measured against, because nothing in a
+  # layout says which shape a process recommends. Plan-view interior angles:
+  # 135 is a regular octagon, 90 a rectangle.
+  #
+  # There is deliberately no sidewall or taper angle here. A GDS holds no Z
+  # information, so no vertical angle is derivable from it by any means; a
+  # manifest offering one under a plan-view key is refused rather than
+  # silently treated as the plan-view angle.
+  shape_targets:
+    pad_corner_angle_deg: 135.0
+    pi_plan_view_corner_angle_deg: 90.0
+    corner_angle_tolerance_deg: 5.0
 
   # PDK-informed, per metal layer. The line-end definition needs to know what
   # counts as a routing line; without these it falls back to the shortest edge

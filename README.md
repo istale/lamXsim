@@ -50,7 +50,7 @@ PYTHONPATH=src python3 -m lamxsim characterize chip.gds \
   --manifest layers.yaml --outdir results/atlas
 ```
 
-Nine channels, one per mechanism, each with its citation:
+Twelve channels, one per mechanism, each with its citation:
 
 | channel | mechanism | reference |
 |---|---|---|
@@ -61,6 +61,9 @@ Nine channels, one per mechanism, each with its citation:
 | `cross_layer_mismatch` | top-to-underlying architecture, two-sided | Vanstreels 2020 |
 | `wide_metal_slotting` | unslotted wide metal, so slotting lowers the score | Rabie 2018 |
 | `corner_metal_tiles` | unbroken top metal at the die corner | Rabie 2018 |
+| `pad_geometry_departure` | pad shape against a declared target, and pad/bump offset | Rabie 2018 |
+| `pi_opening_shape` | opening size and elongation, two-sided | Li 2023/2025 |
+| `crackstop_structure` | rail width and continuity, inverted | Rabie 2018 |
 | `routing_in_bump_frame` | routing not diagonal under corner bumps | Rabie 2018 |
 | `pi_opening_proximity` | stress concentration at the PI opening | Rabie 2018, Li 2023/2025 |
 
@@ -68,6 +71,41 @@ Outputs: `feature_maps.parquet`, `literature_candidates.csv`,
 `candidate_regions.gds`, `literature_traceability.csv`,
 `unsupported_non_gds_physics.csv`, `unimplemented_gds_observables.csv`,
 `assumptions_and_limits.md`.
+
+### Object-level shape
+
+Bump, pad, PI-opening and crackstop descriptors are computed **per object**
+and only then projected onto the grid. A window mean destroys exactly the
+quantity the shape levers are about: two pads of equal area and opposite
+elongation produce the same mean. `package_objects.csv` carries one row per
+object -- id, source layer, area, perimeter, equivalent diameter, Feret
+widths, aspect ratio, circularity, corner angles, principal axis (or the
+reason it is undefined), placement angle, and the match to its bump or pad
+with any ambiguity recorded.
+
+This needs the manifest to say what the polygons **mean**, which no layer
+number can: whether a PI polygon is the opening or the film around it,
+whether pads and bumps are matched by containment, nearest centroid or
+one-to-one, and which corner angle a recommended pad shape is. Those are
+engineering statements about the layout, not extra measurement data, so the
+run stays GDS-only.
+
+```yaml
+layout:
+  package_layers:
+    pi_opening: {name: PI, layer: 61, datatype: 0, polarity: opening}
+  object_matching: containment          # or nearest / one_to_one
+  shape_targets:
+    pad_corner_angle_deg: 135           # a regular octagon
+    pi_plan_view_corner_angle_deg: 90
+```
+
+Everything here is **drawn** geometry in plan view. It is not the post-reflow
+bump, the printed opening, or the assembled overlay. A sidewall or taper angle
+is not derivable from a layout at all -- there is no Z information in a GDS --
+and a manifest offering one under the plan-view key is refused rather than
+quietly reinterpreted. The outermost bump ring is a geometric fact; which bump
+is mechanically critical depends on package loading and is not in a layout.
 
 **Three rules keep this from becoming a risk score.** Spec section 1 forbids
 an arbitrary weighted delamination probability, and a weighted sum of these

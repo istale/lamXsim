@@ -112,6 +112,12 @@ def _extract_scale(reader, manifest, grid, bbox, calibre=None, provenance=None):
 
     if manifest.package_layers.any_present:
         ctx = package_context.extract(grid, bbox, reader, manifest.package_layers)
+        # Object-level shape, kept separate from the window scan above. A
+        # pad's aspect ratio belongs to the pad; averaging it into a window
+        # first would destroy exactly the quantity the shape levers are about.
+        ctx.update(package_context.extract_shapes(
+            grid, bbox, reader, manifest.package_layers,
+            manifest.shape_semantics))
         for name, v in ctx.items():
             flat[f"{name}|-"] = v
         radial = ctx.get("bump_radial_direction_rad")
@@ -340,6 +346,12 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
                  channels=channels, candidates=candidates, metadata=metadata)
 
 
+def _bbox_from(values) -> "BBox":
+    from .layout.reader import BBox
+
+    return BBox(*[float(v) for v in values])
+
+
 def _overlay_gds(atlas: Atlas, path: Path, manifest, *,
                  base_layer: int = 200) -> dict:
     """One marker layer per channel, never a combined hotspot layer.
@@ -365,6 +377,50 @@ def _overlay_gds(atlas: Atlas, path: Path, manifest, *,
                        r.x_um + half, r.y_um + half)
     sl.write(str(path))
     return mapping
+
+
+def _object_table(gds_path: str, manifest, die_bbox) -> pd.DataFrame:
+    """Every package object, one row each, before any window averaging.
+
+    Written out because the grid destroys it: once a pad's aspect ratio is a
+    window mean, the pad it came from, the definition it was computed with and
+    any doubt about which bump it was matched to are all gone. An engineer
+    reading a flagged region needs to be able to ask which pad, and this is
+    the file that answers.
+    """
+    if not manifest.package_layers.any_present:
+        return pd.DataFrame()
+    reader = LayoutReader(gds_path, top_cell=manifest.top_cell)
+    table, matches = package_context.object_table(
+        reader, manifest.package_layers, manifest.shape_semantics, die_bbox)
+
+    matched = {}
+    for (primary, secondary), rows in matches.items():
+        for m in rows:
+            matched[m.primary_id] = {
+                "matched_to": m.secondary_id,
+                "match_rule": m.rule,
+                "match_ambiguity": m.ambiguity,
+                "centroid_offset_um": m.centroid_offset_um,
+                "radial_offset_um": m.radial_offset_um,
+                "tangential_offset_um": m.tangential_offset_um,
+                "overlap_fraction": m.overlap_fraction,
+            }
+
+    rows = []
+    for kind, objects in table.items():
+        for o in objects:
+            row = o.as_row()
+            row.update(matched.get(o.object_id, {
+                "matched_to": "", "match_rule": "",
+                "match_ambiguity": "no match under the declared rule",
+                "centroid_offset_um": float("nan"),
+                "radial_offset_um": float("nan"),
+                "tangential_offset_um": float("nan"),
+                "overlap_fraction": float("nan")}))
+            row["geometry"] = "drawn, plan view; not manufactured"
+            rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def _traceability(atlas: Atlas) -> pd.DataFrame:
@@ -397,32 +453,51 @@ def _traceability(atlas: Atlas) -> pd.DataFrame:
 #: repository has not implemented. Keeping them apart from the genuinely
 #: unavailable physics matters: one list is work, the other is a limit.
 UNIMPLEMENTED_GDS_OBSERVABLES = (
-    ("bump geometry", "bump diameter, area, aspect ratio and placement angle",
+    ("top metal", "explicit corner-tile morphology: tile size, count, pitch "
+     "and the topology of the tile array",
+     "rabie2018cpi",
+     "the corner_metal_tiles channel scores a proxy -- unslotted wide metal "
+     "inside the corner region -- which says a corner is unbroken but not how "
+     "it is tiled. Recovering the array itself needs the tile layer named in "
+     "the manifest, which nothing currently asks for"),
+    ("bump geometry", "a scored channel for drawn bump geometry",
      "li2025beol_design_factors",
-     "varied directly in the 2025 study; recoverable from the bump layer"),
-    ("bump geometry", "explicit outermost / critical-bump identity",
+     "the descriptors are extracted per bump and reported as feature maps, "
+     "but no channel scores them: the study varies bump geometry and reports "
+     "the response without fixing a direction that holds across stacks, and "
+     "inventing one is what a channel would do"),
+    ("bump geometry", "mechanically critical bump identity",
      "li2023beol_failure_locations",
-     "the global loading is placed here before layers are compared"),
-    ("PI opening", "opening diameter, area, aspect ratio and orientation",
-     "li2025beol_design_factors",
-     "varied directly in the 2025 study; recoverable from the PI layer"),
-    ("pad", "pad overlap fraction and pad/bump/PI concentricity",
-     "rabie2018cpi", "pad geometry is one of the listed levers"),
-    ("crackstop", "rail width, double-rail, segmentation and corner topology",
-     "rabie2018cpi", "the crackstop lever is about its structure, not its "
-     "distance"),
-    ("top metal", "die-corner metal tile density",
-     "rabie2018cpi", "the first lever in the paper"),
-    ("wide metal", "wide-metal extent and slotting as exposure channels",
-     "rabie2018cpi", "extracted as features, not yet scored as channels"),
+     "the outermost ring is flagged as a geometric fact, which is as far as a "
+     "layout goes. Which bump carries the largest driving force depends on "
+     "package loading and on the stiffness of everything above it, so this "
+     "one is not recoverable from a GDS at all and is listed here only "
+     "because the outermost-bump proxy is easy to mistake for it"),
+    ("shape measurement", "an object-level quantisation declared per layer "
+     "rather than taken from the database unit",
+     "-",
+     "descriptors are rounded to the database unit and corner angles to 0.1 "
+     "degrees, which is what a layout can express. A process whose drawn grid "
+     "is coarser than its database unit would want its own figure, and "
+     "nothing currently asks for one"),
+    ("PI opening", "sidewall and taper angle",
+     "rabie2018cpi",
+     "not recoverable: a GDS holds no Z information, so no vertical angle "
+     "exists in it. The manifest refuses a sidewall angle offered under the "
+     "plan-view key rather than silently treating one as the other"),
 )
-
-
 def _unimplemented_observables() -> pd.DataFrame:
+    # "recoverable" is per row, not per file. Two entries here are *not*
+    # recoverable from a layout -- the critical-bump identity and any sidewall
+    # angle -- and they are listed anyway because each has a GDS-derived proxy
+    # nearby that is easy to mistake for it. Marking the whole file recoverable
+    # would make the ledger say the opposite of what it means.
+    not_recoverable = ("mechanically critical bump identity",
+                       "sidewall and taper angle")
     return pd.DataFrame([
         {"area": area, "observable": observable, "reference": ref,
-         "recoverable_from_gds": True, "why_it_matters": why,
-         "status": "not implemented"}
+         "recoverable_from_gds": observable not in not_recoverable,
+         "why_it_matters": why, "status": "not implemented"}
         for area, observable, ref, why in UNIMPLEMENTED_GDS_OBSERVABLES])
 
 
@@ -537,6 +612,37 @@ def _limits_document(atlas: Atlas, manifest, overlay: dict) -> str:
             "",
         ]
 
+    lines += ["## Object-level shape, and what drawn geometry is", ""]
+    lines += [
+        "Bump, pad, PI-opening and crackstop descriptors are computed per "
+        "object and only then projected onto the grid; `package_objects.csv` "
+        "holds one row per object with its id, source layer, the definition "
+        "each descriptor was computed with, and any doubt about which object "
+        "it was matched to. A window mean would have destroyed all of that: "
+        "two pads of equal area and opposite elongation produce the same "
+        "mean.",
+        "",
+        "All of it is **drawn** geometry in plan view. A GDS says what was "
+        "drawn, not what was manufactured, so none of these is the "
+        "post-reflow bump, the printed opening after lithography, or the "
+        "assembled overlay -- a drawn pad concentric with its drawn bump says "
+        "nothing about the assembled pair. No sidewall or taper angle is "
+        "derivable at all: a layout holds no Z information, and the manifest "
+        "refuses a sidewall angle offered under a plan-view key rather than "
+        "silently treating one as the other.",
+        "",
+        "The outermost bump ring is flagged as a geometric fact. Which bump "
+        "carries the largest driving force depends on package loading and on "
+        "the stiffness of everything above it, none of which is in a layout.",
+        "",
+        "Descriptors are rounded to the database unit, and corner angles to "
+        "0.1 degrees. Below that there is no geometry, only the arithmetic of "
+        "computing a centroid from snapped vertices -- left in, it gets "
+        "ranked, and on a die of identical pads it manufactures a candidate "
+        "out of rounding.",
+        "",
+    ]
+
     conditioned = [c for c in exposure.CHANNELS if c.conditional_on]
     if conditioned:
         lines += ["## Literature conditioning", ""]
@@ -646,6 +752,13 @@ def write(atlas: Atlas, outdir: str | Path, manifest) -> dict[str, str]:
         overlay = _overlay_gds(atlas, p, manifest)
         paths["candidate_regions"] = str(p)
     atlas.metadata["overlay_layers"] = overlay
+
+    objects = _object_table(atlas.metadata["gds_path"], manifest,
+                            _bbox_from(atlas.metadata["die_bbox_um"]))
+    if not objects.empty:
+        p = out / "package_objects.csv"
+        objects.to_csv(p, index=False)
+        paths["package_objects"] = str(p)
 
     p = out / "assumptions_and_limits.md"
     p.write_text(_limits_document(atlas, manifest, overlay))

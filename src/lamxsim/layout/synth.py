@@ -38,6 +38,11 @@ class SynthLayout:
             db.Box(self._u(x0), self._u(y0), self._u(x1), self._u(y1))
         )
 
+    def add_polygon(self, layer: int, points, datatype: int = 0) -> None:
+        """An arbitrary polygon, for shapes a box cannot express."""
+        self._top.shapes(self._li(layer, datatype)).insert(
+            db.Polygon([db.Point(self._u(x), self._u(y)) for x, y in points]))
+
     def write(self, path: str) -> str:
         self._layout.write(str(path))
         return str(path)
@@ -514,3 +519,61 @@ def radial_routing_die(path: str, *, die_um: float = 3000.0,
     sl.write(path)
     return path, bumps, np.where(choice == 1, np.pi / 2, 0.0)
 
+
+
+def shape_variation_die(path: str, *, die_um: float = 1200.0,
+                        pitch: float = 300.0, margin: float = 150.0,
+                        pad_r: float = 60.0, odd_sites=((0, 0),)):
+    """A die whose pad and PI-opening *shapes* vary from site to site.
+
+    The other synthetic dies vary density, pitch and routing direction, which
+    is what the window features need. None of them varies the shape of an
+    individual pad or opening, so the shape channels have nothing to rank and
+    correctly report nothing -- which is not the same as being tested.
+
+    Here most sites carry an octagonal pad over a square-ish opening, and the
+    sites named in ``odd_sites`` carry a square pad over an elongated opening.
+    That leaves a small genuine extreme rather than a half-and-half split,
+    which would put half the cells at the top value and be the top 50 %.
+
+    Layer map: 8 = M8, 7 = M7, 60 = bump, 61 = PI opening, 64 = pad,
+    62 = crackstop.
+    """
+    import math
+
+    import numpy as np
+
+    sl = SynthLayout()
+    n = int((die_um - 2 * margin) // pitch) + 1
+    for j in range(n):
+        for i in range(n):
+            cx, cy = margin + i * pitch, margin + j * pitch
+            odd = (i, j) in odd_sites
+
+            if odd:
+                sl.add_box(64, cx - pad_r, cy - pad_r, cx + pad_r, cy + pad_r)
+            else:
+                pts = [(cx + pad_r * math.cos(k * math.pi / 4 + math.pi / 8),
+                        cy + pad_r * math.sin(k * math.pi / 4 + math.pi / 8))
+                       for k in range(8)]
+                sl.add_polygon(64, pts)
+
+            sl.add_box(60, cx - pad_r * 0.7, cy - pad_r * 0.7,
+                       cx + pad_r * 0.7, cy + pad_r * 0.7)
+            if odd:
+                sl.add_box(61, cx - pad_r * 0.8, cy - pad_r * 0.2,
+                           cx + pad_r * 0.8, cy + pad_r * 0.2)
+            else:
+                sl.add_box(61, cx - pad_r * 0.4, cy - pad_r * 0.4,
+                           cx + pad_r * 0.4, cy + pad_r * 0.4)
+
+    block = 100.0
+    for j in range(int(die_um // block)):
+        for i in range(int(die_um // block)):
+            x0, y0 = i * block, j * block
+            lines(sl, 8, x0, y0, x0 + block, y0 + block, pitch=6.0, density=0.5)
+            lines(sl, 7, x0, y0, x0 + block, y0 + block, pitch=9.0,
+                  density=0.4, vertical=True)
+    crackstop_ring(sl, 62, die_um)
+    sl.write(path)
+    return path

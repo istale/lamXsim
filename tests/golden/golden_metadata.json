@@ -21,6 +21,8 @@
   ],
   "manifest": {
     "declared_gaps": [
+      "no shape_targets.pad_corner_angle_deg: pad shape can be described but not scored against a recommendation, because nothing says which shape is recommended",
+      "no shape_targets.pi_plan_view_corner_angle_deg: the same, for the PI opening. If the figure being matched is a sidewall or taper angle rather than a plan-view corner, it is not obtainable from a GDS at all -- a layout holds no Z information -- and no value here can stand in for it",
       "no fill_layers: dummy fill cannot be separated from functional geometry, so it contributes to every density and sets the shortest edge on the layer",
       "no layout_revision: nothing checks that every die analysed was built from the layout in this file",
       "11 package/process condition(s) undeclared (emc_thickness_um, underfill_cte_ppm_k, underfill_modulus_gpa, underfill_tg_c...): none can be read from GDS, and if any varies across the study an apparent geometry effect may be standing in for it",

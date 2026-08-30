@@ -152,6 +152,76 @@ class SampleConditions:
 
 
 @dataclass
+class ShapeSemantics:
+    """What the package polygons mean, which a GDS cannot say for itself.
+
+    A layer number is not a semantics. Whether a PI polygon is the opening or
+    the passivation that surrounds it inverts every distance measured from it;
+    whether pads and bumps are matched by containment or by nearest centroid
+    changes which pad an offset bump belongs to. These are engineering
+    statements about the layout, not extra measurement data, so requiring them
+    keeps the run GDS-only.
+    """
+    #: kind -> "positive" (the polygon is the object) or "opening" (the
+    #: polygon is a hole in a film).
+    polarity: dict = field(default_factory=dict)
+    object_matching: str = "containment"
+    match_tolerance_um: float | None = None
+    #: Target plan-view interior angle for a pad corner, where the literature
+    #: recommends a shape. 135 is the regular octagon.
+    pad_corner_angle_deg: float | None = None
+    #: Target plan-view interior angle at a PI-opening corner. Named
+    #: plan_view on purpose -- see validate().
+    pi_plan_view_corner_angle_deg: float | None = None
+    corner_angle_tolerance_deg: float = 5.0
+
+    DEFAULT_POLARITY = {"bump": "positive", "pad": "positive",
+                        "pi_opening": "opening", "crackstop": "positive"}
+
+    def polarity_of(self, kind: str) -> str:
+        return self.polarity.get(kind, self.DEFAULT_POLARITY.get(kind, "positive"))
+
+    def validate(self) -> None:
+        from .features.objects import MATCH_RULES
+
+        if self.object_matching not in MATCH_RULES:
+            raise ValueError(
+                f"layout.object_matching is {self.object_matching!r}; declare "
+                f"one of {list(MATCH_RULES)}. The three disagree exactly where "
+                "the layout is interesting -- an offset pad, a missing bump, "
+                "one bump serving two pads -- so it cannot be guessed.")
+        for kind, value in self.polarity.items():
+            if value not in ("positive", "opening"):
+                raise ValueError(
+                    f"layout.package_layers.{kind}.polarity is {value!r}; it "
+                    "must be 'positive' (the polygon is the object) or "
+                    "'opening' (the polygon is a hole in a film). Getting it "
+                    "backwards inverts every distance measured from that layer.")
+        for name, value in (("pad_corner_angle_deg", self.pad_corner_angle_deg),
+                            ("pi_plan_view_corner_angle_deg",
+                             self.pi_plan_view_corner_angle_deg)):
+            if value is not None and not 0 < float(value) < 360:
+                raise ValueError(f"layout.shape_targets.{name} must be an "
+                                 f"interior angle in degrees; got {value!r}")
+
+    def gaps(self) -> list[str]:
+        out = []
+        if self.pad_corner_angle_deg is None:
+            out.append(
+                "no shape_targets.pad_corner_angle_deg: pad shape can be "
+                "described but not scored against a recommendation, because "
+                "nothing says which shape is recommended")
+        if self.pi_plan_view_corner_angle_deg is None:
+            out.append(
+                "no shape_targets.pi_plan_view_corner_angle_deg: the same, for "
+                "the PI opening. If the figure being matched is a sidewall or "
+                "taper angle rather than a plan-view corner, it is not "
+                "obtainable from a GDS at all -- a layout holds no Z "
+                "information -- and no value here can stand in for it")
+        return out
+
+
+@dataclass
 class LineRule:
     """Per-layer routing widths, from the PDK rather than from the geometry."""
     min_width_um: float
@@ -163,6 +233,7 @@ class StudyManifest:
     metal_layers: list[LayerSpec]
     via_layers: dict[str, LayerSpec] = field(default_factory=dict)
     package_layers: PackageLayers = field(default_factory=PackageLayers)
+    shape_semantics: "ShapeSemantics" = field(default_factory=lambda: ShapeSemantics())
     line_rules: dict[str, LineRule] = field(default_factory=dict)
     fill_layers: dict[str, LayerSpec] = field(default_factory=dict)
     wide_width_um: float = 3.0
@@ -212,8 +283,37 @@ class StudyManifest:
             bump=_spec(pkg_cfg.get("bump")), pad=_spec(pkg_cfg.get("pad")),
             pi_opening=_spec(pkg_cfg.get("pi_opening")),
             crackstop=_spec(pkg_cfg.get("crackstop")))
+        targets = layout.get("shape_targets") or {}
+        semantics = ShapeSemantics(
+            polarity={k: v["polarity"] for k, v in pkg_cfg.items()
+                      if isinstance(v, dict) and "polarity" in v},
+            object_matching=str(layout.get("object_matching", "containment")),
+            match_tolerance_um=(float(layout["match_tolerance_um"])
+                                if layout.get("match_tolerance_um") is not None
+                                else None),
+            pad_corner_angle_deg=(float(targets["pad_corner_angle_deg"])
+                                  if targets.get("pad_corner_angle_deg")
+                                  is not None else None),
+            pi_plan_view_corner_angle_deg=(
+                float(targets["pi_plan_view_corner_angle_deg"])
+                if targets.get("pi_plan_view_corner_angle_deg") is not None
+                else None),
+            corner_angle_tolerance_deg=float(
+                targets.get("corner_angle_tolerance_deg", 5.0)))
+        semantics.validate()
+        for forbidden in ("pi_sidewall_angle_deg", "pi_taper_angle_deg",
+                          "sidewall_angle_deg"):
+            if forbidden in targets:
+                raise ValueError(
+                    f"{path}: layout.shape_targets.{forbidden} cannot be "
+                    "honoured. A GDS holds no Z information, so no sidewall or "
+                    "taper angle is derivable from it by any means. If the "
+                    "figure you are matching is the plan-view corner angle of "
+                    "the opening, declare it as "
+                    "pi_plan_view_corner_angle_deg; if it is the vertical "
+                    "profile, it needs a cross-section, not a layout.")
 
-        gaps = []
+        gaps = list(semantics.gaps()) if package.any_present else []
         for m in metals:
             if m.name not in rules:
                 gaps.append(
@@ -267,7 +367,8 @@ class StudyManifest:
                 fixed=dict((cfg.get("sample_conditions") or {}).get("fixed") or {}),
                 stratified=tuple((cfg.get("sample_conditions") or {}).get("stratified") or ()),
                 covariate=tuple((cfg.get("sample_conditions") or {}).get("covariate") or ())),
-            package_layers=package, line_rules=rules,
+            package_layers=package, shape_semantics=semantics,
+            line_rules=rules,
             top_cell=layout.get("top_cell"),
             die_outline_um=layout.get("die_outline_um"),
             footprint_spec=inspect.get("footprint") or {},

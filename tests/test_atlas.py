@@ -446,3 +446,51 @@ def test_the_corner_tile_lever_is_top_layer_and_corner_only(tmp_path):
     middle = ((rows.x_um - 200.0).abs() < 60.0) & \
              ((rows.y_um - 200.0).abs() < 60.0)
     assert not middle.any()
+
+
+def test_the_coverage_ledger_does_not_contradict_the_channels():
+    """A ledger that lists implemented work is worse than no ledger.
+
+    ``unimplemented_gds_observables.csv`` is what a user reads to know what
+    the atlas does not cover. It listed corner metal tiles and wide-metal
+    slotting after both became channels, so the delivered coverage statement
+    contradicted the delivered channels. Nothing caught it because nothing
+    compared the two.
+    """
+    from lamxsim import atlas as atlas_mod
+
+    ledger = atlas_mod._unimplemented_observables()
+    text = " ".join(ledger.observable.str.lower())
+
+    implemented = {c.channel_id for c in exposure.CHANNELS}
+    for channel_id in implemented:
+        words = channel_id.replace("_", " ")
+        # A channel's own name must not appear as an unimplemented item unless
+        # the row says which *part* is still missing.
+        rows = ledger[ledger.observable.str.lower().str.contains(
+            words.split()[0], regex=False)]
+        for _, row in rows.iterrows():
+            assert any(w in row.why_it_matters.lower()
+                       for w in ("proxy", "not recoverable", "no channel",
+                                 "not recoverable from a gds")), (
+                f"{row.observable!r} reads as unimplemented while "
+                f"{channel_id} exists; say which part is still missing")
+
+    # Every remaining row must state whether a GDS could supply it at all.
+    assert set(ledger.recoverable_from_gds) <= {True, False}
+    assert (~ledger.recoverable_from_gds).any(), (
+        "the two entries that a layout genuinely cannot supply -- critical "
+        "bump identity and any sidewall angle -- must stay marked as such")
+    assert "sidewall" in text and "critical bump" in text
+
+
+def test_every_channel_input_is_traceable_to_the_registry():
+    """A channel whose observable has no registry row is an unsourced claim."""
+    from lamxsim import registry
+
+    for channel in exposure.CHANNELS:
+        for feature in channel.inputs:
+            entry = registry.lookup(feature)
+            assert entry is not None, f"{channel.channel_id}: {feature}"
+            assert not entry.missing_trace, (
+                f"{channel.channel_id}: {feature} -> {entry.missing_trace}")

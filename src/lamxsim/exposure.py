@@ -187,6 +187,74 @@ CHANNELS: tuple[Channel, ...] = (
              "citation.",
     ),
     Channel(
+        channel_id="pad_geometry_departure",
+        mechanism="pad geometry is one of Rabie's five layout levers; a pad "
+                  "that departs from the recommended shape, or that sits off "
+                  "the bump it carries, changes how the package load enters "
+                  "the stack at that site",
+        references=("rabie2018cpi",),
+        observable="departure of the drawn pad's plan-view corner angles from "
+                   "the declared target, and the pad-to-bump centroid offset",
+        inputs=("pad_corner_angle_departure_deg",
+                "pad_bump_centroid_offset_um"),
+        two_sided=False, scope="die",
+        unsupported_physics=("pad stiffness", "bond and joint quality",
+                             "assembly overlay", "package warpage"),
+        requires=("a pad layer", "shape_targets.pad_corner_angle_deg"),
+        note="Departure from a declared target, not risk. The target is the "
+             "manifest's, because nothing in a GDS says which pad shape a "
+             "process recommends. Drawn geometry only: assembly overlay and "
+             "the manufactured pad are not in a layout, so a concentric drawn "
+             "pair says nothing about the assembled one. Where every pad is "
+             "identical the ranking reports no candidate rather than picking "
+             "among equals.",
+    ),
+    Channel(
+        channel_id="pi_opening_shape",
+        mechanism="Li et al. vary the PI opening directly and locate the "
+                  "critical BEOL stress at its edge, so the opening's size "
+                  "and elongation are levers in their own right, separately "
+                  "from how close a cell is to one",
+        references=("li2023beol_failure_locations", "li2025beol_design_factors"),
+        observable="drawn opening area, equivalent diameter, aspect ratio "
+                   "and plan-view corner-angle departure",
+        inputs=("pi_aspect_ratio", "pi_corner_angle_departure_deg",
+                "pi_equivalent_diameter_um"),
+        two_sided=True, scope="die",
+        unsupported_physics=("PI modulus and CTE", "opening sidewall and "
+                             "taper angle, which no layout contains",
+                             "EMC thickness", "energy release rate"),
+        requires=("a PI opening layer",),
+        note="Two-sided: the studies vary the opening and report the response "
+             "without fixing a direction that holds for every stack, so "
+             "flagging only large openings would invent one. Plan view only. "
+             "A sidewall or taper angle is not derivable from a GDS by any "
+             "means -- there is no Z information in a layout -- and the "
+             "manifest refuses to accept one under that name.",
+    ),
+    Channel(
+        channel_id="crackstop_structure",
+        mechanism="the crackstop lever Rabie reports is about the ring "
+                  "itself -- how wide it is, whether there are two, and "
+                  "whether it is continuous -- not about how far a cell is "
+                  "from it",
+        references=("rabie2018cpi",),
+        observable="drawn rail width, rail count, continuity ratio and gap "
+                   "count of the seal-ring structure",
+        inputs=("crackstop_rail_width_min_um", "crackstop_continuity_ratio"),
+        two_sided=False, invert=True, scope="die",
+        unsupported_physics=("crack arrest effectiveness", "interface "
+                             "toughness at the ring", "dicing damage"),
+        requires=("a crackstop layer",),
+        note="Inverted: a narrow or interrupted ring is the departure, so the "
+             "low end is what is flagged. These are one fact about the whole "
+             "ring, so every cell carries the same value and the within-die "
+             "ranking correctly reports nothing -- the quantity discriminates "
+             "between die, which is the comparison the channel is for. "
+             "Distance to the crackstop is a different feature and stays "
+             "separate.",
+    ),
+    Channel(
         channel_id="routing_in_bump_frame",
         mechanism="the package loads the layout through the bumps, and "
                   "diagonal final metal under the corner bumps is one of the "
@@ -349,6 +417,11 @@ def evaluate(channel: Channel, features: dict[str, np.ndarray],
                       if channel.requires else ""))
 
     used = tuple(c for c in channel.inputs if c in features)
+    partial = tuple(c for c in channel.inputs if c not in features)
+    partial_note = (
+        f"scored without {list(partial)}, which {'is' if len(partial) == 1 else 'are'} "
+        "not available; the channel is narrower than its observable says"
+        if partial else "")
     if mask is not None:
         features = {k: np.where(mask, v, np.nan) for k, v in features.items()}
     if channel.channel_id == "perimeter_at_matched_density":
@@ -362,6 +435,7 @@ def evaluate(channel: Channel, features: dict[str, np.ndarray],
             reason = ""
         combined = _percentile_rank(series, channel.two_sided,
                                     invert=channel.invert)
+        reason = "; ".join(x for x in (reason, partial_note) if x)
         return ChannelResult(channel, combined, used, True, reason,
                              values={"perimeter_residual": series},
                              triggering_input=np.array(
@@ -388,9 +462,7 @@ def evaluate(channel: Channel, features: dict[str, np.ndarray],
         trigger[~all_nan] = np.array(used)[winner]
     combined = (_percentile_rank(strongest, two_sided=False)
                 if len(used) > 1 else strongest)
-    return ChannelResult(channel, combined, used, True,
-                         "" if len(missing) == 0
-                         else f"missing {missing}, scored on {list(used)}",
+    return ChannelResult(channel, combined, used, True, partial_note,
                          values=ranks, triggering_input=trigger)
 
 

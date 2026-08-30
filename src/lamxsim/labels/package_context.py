@@ -287,3 +287,186 @@ def absent_context_note(layers: PackageLayers) -> list[str]:
         notes.append("no pad layer supplied: pad geometry, which Rabie et al. "
                      "(2018) list among the layout levers, is not represented.")
     return notes
+
+
+#: Per-object shape features, produced by the object table rather than by a
+#: window scan. The distinction matters: a pad's aspect ratio belongs to the
+#: pad, and a window mean over several pads is a different quantity that
+#: cannot be inverted back into any of them.
+SHAPE_FEATURES = (
+    "bump_object_count", "bump_area_um2", "bump_equivalent_diameter_um",
+    "bump_aspect_ratio", "bump_placement_angle_rad", "bump_circularity",
+    "bump_is_outermost",
+    "pad_object_count", "pad_area_um2", "pad_aspect_ratio",
+    "pad_circularity", "pad_corner_angle_departure_deg",
+    "pad_target_corner_fraction", "pad_bump_centroid_offset_um",
+    "pad_bump_radial_offset_um", "pad_bump_overlap_fraction",
+    "pi_object_count", "pi_area_um2", "pi_equivalent_diameter_um",
+    "pi_aspect_ratio", "pi_principal_axis_rad",
+    "pi_corner_angle_departure_deg", "pi_pad_centroid_offset_um",
+    "crackstop_rail_width_min_um", "crackstop_rail_count",
+    "crackstop_continuity_ratio", "crackstop_n_gaps",
+)
+
+
+def object_table(reader: LayoutReader, layers: PackageLayers,
+                 semantics, die_bbox: BBox | None):
+    """Every package object, described individually, before any gridding.
+
+    Returned as objects and matches rather than as arrays, so a caller can
+    write the table out: an object's id, its source layer, the definition each
+    descriptor was computed with, and any matching ambiguity all survive to
+    the report. Once these are averaged into windows none of that is
+    recoverable.
+    """
+    from ..features import objects as obj
+
+    kinds = {"bump": layers.bump, "pad": layers.pad,
+             "pi_opening": layers.pi_opening}
+    table = {kind: obj.objects_for(reader, spec, kind=kind,
+                                   polarity=semantics.polarity_of(kind),
+                                   die_bbox=die_bbox)
+             for kind, spec in kinds.items()}
+
+    matches = {}
+    rule = semantics.object_matching
+    tol = semantics.match_tolerance_um
+    for primary, secondary in (("pad", "bump"), ("pi_opening", "pad")):
+        pr, sr = kinds[primary], kinds[secondary]
+        regions = ((reader.region(pr), reader.region(sr))
+                   if pr is not None and sr is not None else None)
+        matches[(primary, secondary)] = obj.match(
+            table[primary], table[secondary], rule=rule, die_bbox=die_bbox,
+            tolerance_um=tol, regions=regions, dbu=reader.units.dbu)
+    return table, matches
+
+
+def _outermost_flag(bumps, tolerance_um: float = 1.0) -> np.ndarray:
+    """1.0 for the bumps at the greatest radius, within a tolerance.
+
+    Li et al. place the global loading at the bumps farthest from the die
+    centre, so the outermost ring is worth naming. It is named as a
+    *geometric* fact and nothing more: which bump is mechanically critical
+    depends on the package loading and the stiffness of everything above it,
+    none of which is in a layout. Ties are kept as ties -- a bump array has a
+    whole outer ring at the same radius, and picking one of them would be an
+    artefact of ordering.
+    """
+    if not bumps:
+        return np.empty(0)
+    radii = np.array([b.radial_distance_um for b in bumps])
+    if not np.isfinite(radii).any():
+        return np.full(len(bumps), np.nan)
+    return (radii >= np.nanmax(radii) - tolerance_um).astype(float)
+
+
+def extract_shapes(grid, die_bbox: BBox | None, reader: LayoutReader,
+                   layers: PackageLayers, semantics) -> dict[str, np.ndarray]:
+    """Object-level shape descriptors, rasterised onto *grid*.
+
+    Cells with no object of a kind get NaN, not zero: "no pad here" and "a pad
+    with an aspect ratio of zero" are different statements, and only the
+    second belongs in a ranking of pads.
+    """
+    from ..features import objects as obj
+
+    n = len(grid)
+    # Target-dependent features are left absent, not filled with NaN, when no
+    # target is declared. An all-NaN column makes the channel look available
+    # and then quietly rank nothing; an absent one makes it say which input it
+    # wanted and did not get.
+    target_dependent = {"pad_corner_angle_departure_deg",
+                        "pad_target_corner_fraction",
+                        "pi_corner_angle_departure_deg"}
+    declared = set()
+    if semantics.pad_corner_angle_deg is not None:
+        declared |= {"pad_corner_angle_departure_deg",
+                     "pad_target_corner_fraction"}
+    if semantics.pi_plan_view_corner_angle_deg is not None:
+        declared.add("pi_corner_angle_departure_deg")
+    out = {name: np.full(n, np.nan) for name in SHAPE_FEATURES
+           if name not in target_dependent or name in declared}
+    if not layers.any_present:
+        return out
+
+    table, matches = object_table(reader, layers, semantics, die_bbox)
+
+    bumps = table["bump"]
+    if bumps:
+        outermost = _outermost_flag(bumps)
+        out.update(obj.rasterise(bumps, grid, {
+            "area_um2": np.array([b.area_um2 for b in bumps]),
+            "equivalent_diameter_um": np.array(
+                [b.equivalent_diameter_um for b in bumps]),
+            "aspect_ratio": np.array([b.aspect_ratio for b in bumps]),
+            "placement_angle_rad": np.array(
+                [b.placement_angle_rad for b in bumps]),
+            "circularity": np.array([b.circularity for b in bumps]),
+            "is_outermost": outermost,
+        }, prefix="bump"))
+        out["bump_object_count"] = out.pop("bump_count")
+
+    pads = table["pad"]
+    if pads:
+        target = semantics.pad_corner_angle_deg
+        tol = semantics.corner_angle_tolerance_deg
+        values = {
+            "area_um2": np.array([p.area_um2 for p in pads]),
+            "aspect_ratio": np.array([p.aspect_ratio for p in pads]),
+            "circularity": np.array([p.circularity for p in pads]),
+        }
+        if target is not None:
+            values["corner_angle_departure_deg"] = np.array(
+                [obj.corner_angle_departure(p, target, tolerance_deg=tol)
+                 for p in pads])
+            values["target_corner_fraction"] = np.array(
+                [obj.target_corner_fraction(p, target, tolerance_deg=tol)
+                 for p in pads])
+        by_id = {p.object_id: i for i, p in enumerate(pads)}
+        for name, attr in (("bump_centroid_offset_um", "centroid_offset_um"),
+                           ("bump_radial_offset_um", "radial_offset_um"),
+                           ("bump_overlap_fraction", "overlap_fraction")):
+            series = np.full(len(pads), np.nan)
+            for m in matches[("pad", "bump")]:
+                series[by_id[m.primary_id]] = getattr(m, attr)
+            values[name] = series
+        out.update(obj.rasterise(pads, grid, values, prefix="pad"))
+        out["pad_object_count"] = out.pop("pad_count")
+
+    openings = table["pi_opening"]
+    if openings:
+        target = semantics.pi_plan_view_corner_angle_deg
+        tol = semantics.corner_angle_tolerance_deg
+        values = {
+            "area_um2": np.array([o.area_um2 for o in openings]),
+            "equivalent_diameter_um": np.array(
+                [o.equivalent_diameter_um for o in openings]),
+            "aspect_ratio": np.array([o.aspect_ratio for o in openings]),
+            "principal_axis_rad": np.array(
+                [o.principal_axis_rad for o in openings]),
+        }
+        if target is not None:
+            values["corner_angle_departure_deg"] = np.array(
+                [obj.corner_angle_departure(o, target, tolerance_deg=tol)
+                 for o in openings])
+        by_id = {o.object_id: i for i, o in enumerate(openings)}
+        series = np.full(len(openings), np.nan)
+        for m in matches[("pi_opening", "pad")]:
+            series[by_id[m.primary_id]] = m.centroid_offset_um
+        values["pad_centroid_offset_um"] = series
+        out.update(obj.rasterise(openings, grid, values, prefix="pi"))
+        out["pi_object_count"] = out.pop("pi_count")
+
+    structure = obj.crackstop_structure(reader, layers.crackstop, die_bbox)
+    if structure is not None:
+        # A structure is one fact about the whole ring, not a per-cell one, so
+        # it is broadcast: every cell carries the same value. That makes it
+        # useless for ranking within one die and useful for comparing dies,
+        # which is what the channel says about itself.
+        for name, value in (
+                ("crackstop_rail_width_min_um", structure.rail_width_min_um),
+                ("crackstop_rail_count", float(structure.n_rails)),
+                ("crackstop_continuity_ratio", structure.continuity_ratio),
+                ("crackstop_n_gaps", float(structure.n_gaps))):
+            out[name] = np.full(n, value, dtype=float)
+    return out

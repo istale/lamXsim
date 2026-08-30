@@ -54,6 +54,24 @@ Every one of the 120 candidate records is a **mechanistic engineering hypothesis
   - observable: unslotted wide-metal fraction on the topmost metal layer, inside the die-corner region
   - note: Top layer only and corner only, because that is the lever as stated. Scored on every layer it would assert something about the layers beneath that the reference does not; scored die-wide it would be the wide_metal_slotting channel under a second citation.
 
+**pad_geometry_departure** -- 0 candidate(s), one-sided
+  - mechanism: pad geometry is one of Rabie's five layout levers; a pad that departs from the recommended shape, or that sits off the bump it carries, changes how the package load enters the stack at that site
+  - references: rabie2018cpi
+  - observable: departure of the drawn pad's plan-view corner angles from the declared target, and the pad-to-bump centroid offset
+  - note: Departure from a declared target, not risk. The target is the manifest's, because nothing in a GDS says which pad shape a process recommends. Drawn geometry only: assembly overlay and the manufactured pad are not in a layout, so a concentric drawn pair says nothing about the assembled one. Where every pad is identical the ranking reports no candidate rather than picking among equals.
+
+**pi_opening_shape** -- 0 candidate(s), two-sided
+  - mechanism: Li et al. vary the PI opening directly and locate the critical BEOL stress at its edge, so the opening's size and elongation are levers in their own right, separately from how close a cell is to one
+  - references: li2023beol_failure_locations, li2025beol_design_factors
+  - observable: drawn opening area, equivalent diameter, aspect ratio and plan-view corner-angle departure
+  - note: Two-sided: the studies vary the opening and report the response without fixing a direction that holds for every stack, so flagging only large openings would invent one. Plan view only. A sidewall or taper angle is not derivable from a GDS by any means -- there is no Z information in a layout -- and the manifest refuses to accept one under that name.
+
+**crackstop_structure** -- 0 candidate(s), one-sided
+  - mechanism: the crackstop lever Rabie reports is about the ring itself -- how wide it is, whether there are two, and whether it is continuous -- not about how far a cell is from it
+  - references: rabie2018cpi
+  - observable: drawn rail width, rail count, continuity ratio and gap count of the seal-ring structure
+  - note: Inverted: a narrow or interrupted ring is the departure, so the low end is what is flagged. These are one fact about the whole ring, so every cell carries the same value and the within-die ranking correctly reports nothing -- the quantity discriminates between die, which is the comparison the channel is for. Distance to the crackstop is a different feature and stays separate.
+
 **routing_in_bump_frame** -- 8 candidate(s), one-sided
   - mechanism: the package loads the layout through the bumps, and diagonal final metal under the corner bumps is one of the documented levers, so routing that is radial or tangential there is the departure
   - references: rabie2018cpi
@@ -73,6 +91,8 @@ Every one of the 120 candidate records is a **mechanistic engineering hypothesis
 
 ## Declared gaps in the manifest
 
+- no shape_targets.pad_corner_angle_deg: pad shape can be described but not scored against a recommendation, because nothing says which shape is recommended
+- no shape_targets.pi_plan_view_corner_angle_deg: the same, for the PI opening. If the figure being matched is a sidewall or taper angle rather than a plan-view corner, it is not obtainable from a GDS at all -- a layout holds no Z information -- and no value here can stand in for it
 - no fill_layers: dummy fill cannot be separated from functional geometry, so it contributes to every density and sets the shortest edge on the layer
 - no layout_revision: nothing checks that every die analysed was built from the layout in this file
 - 11 package/process condition(s) undeclared (emc_thickness_um, underfill_cte_ppm_k, underfill_modulus_gpa, underfill_tg_c...): none can be read from GDS, and if any varies across the study an apparent geometry effect may be standing in for it
@@ -94,6 +114,16 @@ There is deliberately no combined hotspot layer.
 ## The die frame
 
 A die outline is declared in the manifest, so distance to a corner, offset from the die centre and bump radial direction are measured from a frame the manifest vouches for.
+
+## Object-level shape, and what drawn geometry is
+
+Bump, pad, PI-opening and crackstop descriptors are computed per object and only then projected onto the grid; `package_objects.csv` holds one row per object with its id, source layer, the definition each descriptor was computed with, and any doubt about which object it was matched to. A window mean would have destroyed all of that: two pads of equal area and opposite elongation produce the same mean.
+
+All of it is **drawn** geometry in plan view. A GDS says what was drawn, not what was manufactured, so none of these is the post-reflow bump, the printed opening after lithography, or the assembled overlay -- a drawn pad concentric with its drawn bump says nothing about the assembled pair. No sidewall or taper angle is derivable at all: a layout holds no Z information, and the manifest refuses a sidewall angle offered under a plan-view key rather than silently treating one as the other.
+
+The outermost bump ring is flagged as a geometric fact. Which bump carries the largest driving force depends on package loading and on the stiffness of everything above it, none of which is in a layout.
+
+Descriptors are rounded to the database unit, and corner angles to 0.1 degrees. Below that there is no geometry, only the arithmetic of computing a centroid from snapped vertices -- left in, it gets ranked, and on a die of identical pads it manufactures a candidate out of rounding.
 
 ## Literature conditioning
 
