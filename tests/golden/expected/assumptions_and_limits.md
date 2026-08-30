@@ -4,7 +4,7 @@
 
 Every feature map is a **deterministic geometry fact** -- checkable against KLayout or Calibre, independent of any failure data.
 
-Every one of the 117 candidate records is a **mechanistic engineering hypothesis**: a location where this layout departs from a lever the literature documents, with the citation attached. It is a reason to look there first.
+Every one of the 120 candidate records is a **mechanistic engineering hypothesis**: a location where this layout departs from a lever the literature documents, with the citation attached. It is a reason to look there first.
 
 ## What it is not
 
@@ -42,6 +42,18 @@ Every one of the 117 candidate records is a **mechanistic engineering hypothesis
   - references: vanstreels2020beol, zahedmanesh2019metallization
   - observable: top-to-underlying density and orientation mismatch
 
+**wide_metal_slotting** -- 3 candidate(s), one-sided
+  - mechanism: a continuous span of wide metal carries the stiffness mismatch across its whole extent; slotting breaks the span, and Rabie lists wide-metal slotting among the layout levers
+  - references: rabie2018cpi
+  - observable: wide-metal area fraction that is not slotted, from a morphological opening at the declared wide-metal width
+  - note: Unslotted wide metal, not wide metal. Ranking wide-metal fraction alone would flag a correctly slotted plate exactly as hard as an unbroken one, which inverts the lever: slotting is the recommended state, so its presence must lower the score. Can co-fire with corner_metal_tiles on top-layer geometry near a die corner; that is one piece of geometry seen through two of Rabie's levers, not two independent observations.
+
+**corner_metal_tiles** -- 0 candidate(s), one-sided
+  - mechanism: corner metal tiling is the first of Rabie's die-corner levers: unbroken top metal at the die corner couples the package corner load straight into the stack
+  - references: rabie2018cpi
+  - observable: unslotted wide-metal fraction on the topmost metal layer, inside the die-corner region
+  - note: Top layer only and corner only, because that is the lever as stated. Scored on every layer it would assert something about the layers beneath that the reference does not; scored die-wide it would be the wide_metal_slotting channel under a second citation.
+
 **routing_in_bump_frame** -- 8 candidate(s), one-sided
   - mechanism: the package loads the layout through the bumps, and diagonal final metal under the corner bumps is one of the documented levers, so routing that is radial or tangential there is the departure
   - references: rabie2018cpi
@@ -75,6 +87,7 @@ Every one of the 117 candidate records is a **mechanistic engineering hypothesis
 - layer 204: `routing_in_bump_frame`
 - layer 205: `termination`
 - layer 206: `via_architecture`
+- layer 207: `wide_metal_slotting`
 
 There is deliberately no combined hotspot layer.
 
@@ -84,6 +97,7 @@ A die outline is declared in the manifest, so distance to a corner, offset from 
 
 ## Literature conditioning
 
+- `corner_metal_tiles` is ranked **inside** the top 25% of `distance_to_nearest_corner` (low end), because that is the region its citation is about. Cells outside it are not ranked and cannot be candidates.
 - `routing_in_bump_frame` is ranked **inside** the top 25% of `distance_to_nearest_corner` (low end), because that is the region its citation is about. Cells outside it are not ranked and cannot be candidates.
 - `pi_opening_proximity` is ranked **inside** the top 25% of `nearest_bump_distance_from_die_center`, because that is the region its citation is about. Cells outside it are not ranked and cannot be candidates.
 

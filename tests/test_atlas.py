@@ -306,3 +306,143 @@ def test_a_channel_whose_condition_is_unavailable_is_refused_not_widened():
     results = {r.channel.channel_id: r
                for r in exposure.evaluate_all(features, 25)}
     assert results[channel.channel_id].available is False
+
+
+def _slotting_die(path, *, pitch=50.0, n=8, solid_cells=((0, 0), (7, 7), (0, 7))):
+    """An n x n array of separate plates, all slotted except a named few.
+
+    The golden die cannot exercise these channels: its wide-metal fraction
+    takes too few distinct values, so every cell ties and the channel
+    correctly reports nothing. Nor can a die that is half solid -- half the
+    cells then share the top value, which is the top 50 % and not the top 5 %.
+    A channel that is never exercised is a channel whose direction nobody has
+    checked, so the fixture is built to leave a genuine small extreme: three
+    solid plates out of 64 is 4.7 %.
+
+    The plates are separated so the boolean engine does not merge them, which
+    matters because the unslotted measure is defined per polygon.
+    """
+    import klayout.db as db
+
+    from lamxsim.layout import synth
+
+    size = pitch * 0.8
+    sl = synth.SynthLayout()
+    # A frame on an unanalysed layer, so the geometry bounding box is the die
+    # and the analysis grid lands one window per plate. Without it the bbox is
+    # the plate extent, the grid is centred inside it, and a test asserting
+    # which cell was flagged is really asserting where the grid happened to
+    # fall.
+    die = pitch * n
+    for x0, y0, x1, y1 in ((0, 0, die, 0.5), (0, die - 0.5, die, die),
+                           (0, 0, 0.5, die), (die - 0.5, 0, die, die)):
+        sl.add_box(63, x0, y0, x1, y1)
+    for j in range(n):
+        for i in range(n):
+            x0, y0 = i * pitch + (pitch - size) / 2, j * pitch + (pitch - size) / 2
+            for layer in (8, 7):
+                sl.add_box(layer, x0, y0, x0 + size, y0 + size)
+            if (i, j) in solid_cells:
+                continue
+            for b in range(3):
+                for a in range(3):
+                    sl.add_box(99, x0 + 5 + a * 12, y0 + 5 + b * 12,
+                               x0 + 11 + a * 12, y0 + 11 + b * 12)
+    sl.write(str(path))
+
+    layout = db.Layout()
+    layout.read(str(path))
+    top = layout.top_cells()[0]
+    cut_index = layout.find_layer(99, 0)
+    cutter = db.Region()
+    cutter.insert(top.begin_shapes_rec(cut_index))
+    cutter.merge()
+    for number in (8, 7):
+        li = layout.find_layer(number, 0)
+        metal = db.Region()
+        metal.insert(top.begin_shapes_rec(li))
+        metal.merge()
+        top.shapes(li).clear()
+        top.shapes(li).insert(metal - cutter)
+    top.shapes(cut_index).clear()
+    layout.write(str(path))
+    return str(path)
+
+
+def _slotting_manifest(path, *, pitch=50.0, n=8):
+    import yaml
+
+    die = pitch * n
+    yaml.safe_dump({
+        "layout": {
+            "top_cell": "TOP",
+            "metal_layers": [{"name": "M8", "layer": 8, "datatype": 0},
+                             {"name": "M7", "layer": 7, "datatype": 0}],
+            "die_outline_um": [0, 0, die, die],
+            "wide_width_um": 3.0,
+            "line_rules": {"M8": {"min_width_um": 0.2, "line_max_width_um": 2.0},
+                           "M7": {"min_width_um": 0.2, "line_max_width_um": 2.0}},
+        },
+        "analysis": {"scales_um": [pitch]},
+    }, open(path, "w"))
+    return str(path)
+
+
+def test_slotting_lowers_the_score_it_is_supposed_to_lower(tmp_path):
+    """Rabie's lever is slotting, so the recommended state must score lower.
+
+    Ranking ``wide_metal_fraction`` would flag a correctly slotted plate
+    exactly as hard as an unbroken one, which inverts the lever. The channel
+    reads unslotted wide metal instead, and this asserts the direction on a
+    die that is solid on one half and slotted on the other.
+    """
+    from lamxsim.study import StudyManifest
+
+    solid = {(0, 0), (7, 7), (0, 7)}
+    gds = _slotting_die(tmp_path / "slotting.gds", solid_cells=tuple(solid))
+    manifest = StudyManifest.load(_slotting_manifest(tmp_path / "m.yaml"))
+    result = atlas.build(gds, manifest)
+
+    rows = result.candidates[result.candidates.channel == "wide_metal_slotting"]
+    assert not rows.empty, "the channel found nothing on a die built to trip it"
+    flagged = {(int(r.x_um // 50), int(r.y_um // 50)) for _, r in rows.iterrows()}
+    assert flagged == solid, flagged
+
+    values = result.features["unslotted_wide_metal_fraction|M8"]
+    xs = result.features.x_um.to_numpy() // 50
+    ys = result.features.y_um.to_numpy() // 50
+    is_solid = np.array([(int(a), int(b)) in solid for a, b in zip(xs, ys)])
+    assert values[is_solid].min() > 0.9
+    assert values[~is_solid].max() == 0.0
+
+
+def test_the_corner_tile_lever_is_top_layer_and_corner_only(tmp_path):
+    """Scored on every layer it asserts something the citation does not.
+
+    Rabie's lever is corner metal tiling on the top group. Reported on M7 it
+    would be a claim about M7; reported die-wide it would be the
+    wide_metal_slotting channel under a second citation from the same paper.
+    """
+    from lamxsim.study import StudyManifest
+
+    # One solid corner plate, not three. The corner condition admits the 16
+    # cells nearest a corner, so three of them share the top value and sit at
+    # the 81st percentile -- correct tie compression, and useless for testing
+    # where the candidates land.
+    gds = _slotting_die(tmp_path / "corner.gds", solid_cells=((0, 0),))
+    manifest = StudyManifest.load(_slotting_manifest(tmp_path / "m.yaml"))
+    result = atlas.build(gds, manifest)
+
+    scored = {(owner, r.channel.channel_id)
+              for cs in result.channels.values() for owner, r in cs}
+    assert ("M8", "corner_metal_tiles") in scored
+    assert ("M7", "corner_metal_tiles") not in scored
+    assert ("M7", "wide_metal_slotting") in scored
+
+    rows = result.candidates[result.candidates.channel == "corner_metal_tiles"]
+    assert not rows.empty, "the corner lever found nothing on a corner-solid die"
+    assert set(rows.layer) == {"M8"}
+    # Corner-conditioned: nothing may sit in the middle of the die.
+    middle = ((rows.x_um - 200.0).abs() < 60.0) & \
+             ((rows.y_um - 200.0).abs() < 60.0)
+    assert not middle.any()

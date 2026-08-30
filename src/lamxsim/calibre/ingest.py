@@ -489,6 +489,61 @@ class CalibreSource:
                   "with nothing in the output saying so. Re-run the deck.")
         return binding
 
+    def check_contract(self, manifest) -> None:
+        """Refuse a deck built against different layer rules than these.
+
+        The digest of the manifest file is recorded but is deliberately *not*
+        the gate: adding a package condition or a comment changes it while
+        changing nothing the deck depends on, and a gate that fires on
+        unrelated edits gets worked around. What the deck actually depends on
+        is the layer identity, the minimum width -- eps is a quarter of it and
+        the guard threshold is it -- the scales and the step ratio, so those
+        are compared directly.
+
+        Without this, a deck generated at min_width 0.2um (eps 0.05um) was
+        accepted by a run whose manifest declared 0.4um, and the metadata
+        reported both numbers side by side.
+        """
+        from .svrf import layers_from_manifest
+
+        want = {l.name: l for l in layers_from_manifest(manifest)}
+        have = {e["name"]: e for e in self.manifest["layers"]}
+        problems = []
+        for name, layer in want.items():
+            entry = have.get(name)
+            if entry is None:
+                problems.append(f"{name}: not in the deck")
+                continue
+            if (entry["layer"], entry["datatype"]) != (layer.layer, layer.datatype):
+                problems.append(
+                    f"{name}: deck used {entry['layer']}/{entry['datatype']}, "
+                    f"the manifest says {layer.layer}/{layer.datatype}")
+            if entry["is_via"] != layer.is_via:
+                problems.append(f"{name}: deck treated it as "
+                                f"{'a via' if entry['is_via'] else 'metal'}, "
+                                f"the manifest as "
+                                f"{'a via' if layer.is_via else 'metal'}")
+            if layer.is_via:
+                continue
+            if abs(entry["min_width_um"] - layer.min_width_um) > 1e-9:
+                problems.append(
+                    f"{name}: deck used min_width {entry['min_width_um']:g}um "
+                    f"(so eps {entry['eps_um']:g}um and that guard threshold), "
+                    f"the manifest says {layer.min_width_um:g}um")
+
+        deck_scales = sorted(float(s) for s in self.manifest["scales_um"])
+        want_scales = sorted(float(s) for s in manifest.scales_um)
+        if deck_scales != want_scales:
+            problems.append(f"scales: deck {deck_scales}um, "
+                            f"manifest {want_scales}um")
+        if problems:
+            raise ValueError(
+                f"the deck output in {self.directory} was built against "
+                "different layer rules than this run uses:\n  "
+                + "\n  ".join(problems)
+                + "\nThe maps would be reported under rules they were not "
+                  "measured with. Re-run the deck for this manifest.")
+
     def check_complete(self, layers, scales_um) -> None:
         """Refuse a run that would mix the two extractors without saying so.
 

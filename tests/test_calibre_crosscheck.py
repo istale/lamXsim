@@ -262,7 +262,12 @@ def test_deck_output_without_its_extraction_manifest_is_refused(tmp_path):
 
 
 def test_a_deck_missing_a_manifest_scale_is_refused(tmp_path):
-    """Half the atlas from each path, with nothing saying which half."""
+    """Half the atlas from each path, with nothing saying which half.
+
+    Caught by the contract gate, which sees the deck declaring one scale where
+    the manifest asks for two; the completeness gate would catch the same run
+    on the missing files if the deck had claimed both.
+    """
     from lamxsim import atlas as atlas_mod
 
     manifest = StudyManifest.load(str(GOLDEN / "golden_manifest.yaml"))
@@ -270,9 +275,9 @@ def test_a_deck_missing_a_manifest_scale_is_refused(tmp_path):
     out = tmp_path / "one_scale"
     emulate.run(gds, _layers(manifest), scales_um=(float(manifest.scales_um[0]),),
                 step_ratio=1.0, outdir=out)
-    with pytest.raises(ValueError, match="incomplete") as excinfo:
+    with pytest.raises(ValueError, match="scales") as excinfo:
         atlas_mod.build(gds, manifest, calibre_dir=str(out))
-    assert "250um" in str(excinfo.value)
+    assert "250" in str(excinfo.value)
 
 
 def test_a_partial_deck_directory_is_refused(tmp_path):
@@ -423,3 +428,44 @@ def test_deck_output_with_no_binding_at_all_is_refused(tmp_path):
     side.write_text(json.dumps(data))
     with pytest.raises(ValueError, match="no layout binding"):
         atlas_mod.build(gds, manifest, calibre_dir=str(out))
+
+
+def test_a_deck_built_against_different_layer_rules_is_refused(tmp_path):
+    """Recording traceability is not the same as gating on it.
+
+    The sidecar carried the manifest digest and nothing compared it. A deck
+    generated at min_width 0.2um (eps 0.05um) was accepted by a run whose
+    manifest declared 0.4um, and the metadata then reported both numbers.
+
+    The gate is on what the deck depends on -- layer identity, minimum width,
+    scales -- not on the digest: an unrelated manifest edit changes the digest
+    while changing nothing the deck measured, and a gate that fires on those
+    gets worked around.
+    """
+    import yaml
+
+    from lamxsim import atlas as atlas_mod
+
+    manifest_path = GOLDEN / "golden_manifest.yaml"
+    manifest = StudyManifest.load(str(manifest_path))
+    gds = str(GOLDEN / "golden_die.gds")
+    out = tmp_path / "deck"
+    emulate.run(gds, _layers(manifest), scales_um=tuple(manifest.scales_um),
+                step_ratio=1.0, outdir=out, manifest=manifest)
+
+    raw = yaml.safe_load(manifest_path.read_text())
+    raw["layout"]["line_rules"]["M8"]["min_width_um"] = 0.4
+    changed = tmp_path / "changed.yaml"
+    changed.write_text(yaml.safe_dump(raw))
+
+    with pytest.raises(ValueError, match="different layer rules") as excinfo:
+        atlas_mod.build(gds, StudyManifest.load(changed), calibre_dir=str(out))
+    assert "0.2um" in str(excinfo.value) and "0.4um" in str(excinfo.value)
+
+    # An edit the deck does not depend on must not invalidate it.
+    raw = yaml.safe_load(manifest_path.read_text())
+    raw.setdefault("sample_conditions", {}).setdefault("fixed", {})
+    raw["sample_conditions"]["fixed"]["emc_thickness_um"] = 400.0
+    unrelated = tmp_path / "unrelated.yaml"
+    unrelated.write_text(yaml.safe_dump(raw))
+    atlas_mod.build(gds, StudyManifest.load(unrelated), calibre_dir=str(out))

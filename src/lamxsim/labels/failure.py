@@ -336,6 +336,32 @@ def stratify(failures: FailureSet, by=("failed_interface",)
     if not present:
         return {"<all>": failures}
 
+    # A missing value in a stratifying column is refused, not bucketed.
+    # Joining it in produced a TypeError here (a float NaN survives the
+    # astype(str) on a nullable string column), and the obvious repair -- a
+    # "nan" or "<missing>" stratum -- is worse than the crash: it presents
+    # "we do not know which interface this was" as a mechanism alongside
+    # M8/ULK, and every per-stratum effect, direction and q-value would then
+    # be reported for it. An unknown interface is not another known interface,
+    # and the analysis cannot decide which one it was.
+    blank = failures.table[present].isna().any(axis=1)
+    for column in present:
+        values = failures.table[column]
+        if values.dtype == object or str(values.dtype).startswith("str"):
+            blank |= values.astype("string").fillna("").str.strip() == ""
+    if blank.any():
+        counts = {c: int(failures.table[c].isna().sum()) for c in present}
+        raise ValueError(
+            f"{int(blank.sum())} of {len(failures.table)} failure(s) have no "
+            f"value in the stratifying column(s) {present} "
+            f"({', '.join(f'{k}: {v} missing' for k, v in counts.items())}). "
+            "Stratifying by mechanism asks whether a feature associates with "
+            "each mechanism separately; a row whose mechanism is unknown "
+            "belongs to no stratum, and putting it in one of its own would "
+            "report 'unknown' as a mechanism with its own effect size and "
+            "q-value. Classify these rows, or drop them from the file and say "
+            "in the study record that they were dropped and why.")
+
     keys = (failures.table[present].astype(str)
             .agg("|".join, axis=1).rename("stratum"))
     out = {}

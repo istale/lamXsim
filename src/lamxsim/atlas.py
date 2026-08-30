@@ -216,6 +216,7 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
                 "KLayout extractor while the run reported itself as a deck "
                 "extraction.")
         calibre.check_binding(gds_path, reader, manifest)
+        calibre.check_contract(manifest)
         calibre.check_complete(wanted, manifest.scales_um)
         eps_guard = calibre.check_eps_guard(wanted)
 
@@ -233,23 +234,40 @@ def build(gds_path: str, manifest, *, candidate_percentile: float =
         # Die-scoped channels once, layer-scoped channels per layer. Reporting
         # a shared package or cross-layer feature under every metal layer
         # would present one candidate as several and read as corroboration.
+        # Die-scoped channels once, layer-scoped channels per layer. Reporting
+        # a shared package or cross-layer feature under every metal layer
+        # would present one candidate as several and read as corroboration.
+        # A top-layer lever is scored on the topmost layer only, for the same
+        # reason: on M7 it would assert something about M7 that the citation
+        # says about the top group.
+        top_layer = manifest.metal_layers[0].name
         scored = [("-", c, _channel_inputs(flat, "-"))
                   for c in exposure.CHANNELS if c.scope == "die"]
         scored += [(spec.name, c, _channel_inputs(flat, spec.name))
                    for spec in manifest.metal_layers
-                   for c in exposure.CHANNELS if c.scope == "layer"]
+                   for c in exposure.CHANNELS
+                   if c.scope == "layer"
+                   and (not c.top_layer_only or spec.name == top_layer)]
 
         for owner, channel, inputs in scored:
             for result in [_score(channel, inputs, len(grid),
                                   die_frame_declared, no_die_frame_reason)]:
                 scale_channels.append((owner, result))
-                if not result.available:
+                if result.available:
+                    note = exposure.tie_compression_note(result,
+                                                         candidate_percentile)
+                    if note:
+                        result.reason = ((result.reason + "; ") if result.reason
+                                         else "") + note
+                # Every reason carries where it applies. Without it one run
+                # said via_architecture was unavailable while listing M8 via
+                # candidates -- the layer with no via layer was M7 -- and two
+                # layers reporting the same tie compression collapsed into one
+                # line that named neither.
+                if result.reason:
                     result.reason = f"{result.reason} [{owner} @ {scale:g}um]"
+                if not result.available:
                     continue
-                note = exposure.tie_compression_note(result, candidate_percentile)
-                if note:
-                    result.reason = ((result.reason + "; ") if result.reason
-                                     else "") + note
                 pct = result.percentile
                 flagged = np.where(np.isfinite(pct)
                                    & (pct >= candidate_percentile))[0]

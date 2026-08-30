@@ -50,7 +50,7 @@ PYTHONPATH=src python3 -m lamxsim characterize chip.gds \
   --manifest layers.yaml --outdir results/atlas
 ```
 
-Seven channels, one per mechanism, each with its citation:
+Nine channels, one per mechanism, each with its citation:
 
 | channel | mechanism | reference |
 |---|---|---|
@@ -59,6 +59,8 @@ Seven channels, one per mechanism, each with its citation:
 | `via_architecture` | via density, two-sided | Vanstreels 2020, Zahedmanesh 2019 |
 | `layout_transition` | abrupt change in metallisation | Rabie 2018 |
 | `cross_layer_mismatch` | top-to-underlying architecture, two-sided | Vanstreels 2020 |
+| `wide_metal_slotting` | unslotted wide metal, so slotting lowers the score | Rabie 2018 |
+| `corner_metal_tiles` | unbroken top metal at the die corner | Rabie 2018 |
 | `routing_in_bump_frame` | routing not diagonal under corner bumps | Rabie 2018 |
 | `pi_opening_proximity` | stress concentration at the PI opening | Rabie 2018, Li 2023/2025 |
 

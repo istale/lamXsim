@@ -146,3 +146,51 @@ def test_the_run_records_its_registry_audit(opposing):
     audit = res.metadata["feature_registry"]
     assert audit["n_features"] > 0
     assert audit["unregistered"] == []
+
+
+def _failure_file(path, interfaces):
+    import pandas as pd
+
+    n = len(interfaces)
+    pd.DataFrame({
+        "sample_id": ["s1"] * n,
+        "x_um": [10.0 * (i + 1) for i in range(n)],
+        "y_um": [10.0 * (i + 1) for i in range(n)],
+        "lot_id": ["L1"] * n, "wafer_id": ["W1"] * n,
+        "die_x": [0] * n, "die_y": [0] * n,
+        "failure_type": ["delamination"] * n,
+        "failed_interface": interfaces,
+    }).to_csv(path, index=False)
+    return str(path)
+
+
+def test_a_missing_stratum_value_is_refused_not_bucketed(tmp_path):
+    """The repair that suggests itself is worse than the crash it replaces.
+
+    Joining a missing value in raised a TypeError -- a float NaN survives
+    astype(str) on a nullable string column -- and the obvious fix, a "nan" or
+    "<missing>" stratum, presents "we do not know which interface this was" as
+    a mechanism alongside M8/ULK, with its own effect size, direction and
+    q-value. Only rows whose mechanism is known can be analysed per mechanism.
+
+    Coverage before this: all values present, or the column absent entirely.
+    Not the real case, which is a column that exists and is partly filled.
+    """
+    from lamxsim.labels.failure import load_failures, stratify
+
+    partly = load_failures(_failure_file(tmp_path / "partial.csv",
+                                         ["M8/ULK", "M8/ULK", None]))
+    with pytest.raises(ValueError, match="have no value in the stratifying"):
+        stratify(partly, by=("failed_interface",))
+
+    # An empty string is a missing value written a different way.
+    blanked = load_failures(_failure_file(tmp_path / "blank.csv",
+                                          ["M8/ULK", "", "M7/ULK"]))
+    with pytest.raises(ValueError, match="have no value in the stratifying"):
+        stratify(blanked, by=("failed_interface",))
+
+    complete = load_failures(_failure_file(tmp_path / "complete.csv",
+                                           ["M8/ULK", "M8/ULK", "M7/ULK"]))
+    strata = stratify(complete, by=("failed_interface",))
+    assert {k: len(v.table) for k, v in strata.items()} == {"M8/ULK": 2,
+                                                            "M7/ULK": 1}

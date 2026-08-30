@@ -104,7 +104,8 @@
     "pi_opening_proximity": 203,
     "routing_in_bump_frame": 204,
     "termination": 205,
-    "via_architecture": 206
+    "via_architecture": 206,
+    "wide_metal_slotting": 207
   },
   "scales_um": [
     100.0,

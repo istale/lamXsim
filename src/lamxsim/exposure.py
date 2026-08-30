@@ -69,6 +69,10 @@ class Channel:
     #: be a whole die. Nothing in a layout says which it is, so the manifest
     #: has to, and a channel marked here is refused when it does not.
     needs_die_frame: bool = False
+    #: True for a channel whose lever is about the topmost metal group. Scored
+    #: on that layer alone; scoring it on every layer would report a claim the
+    #: citation does not make about the layers beneath.
+    top_layer_only: bool = False
     requires: tuple[str, ...] = ()
     note: str = ""
 
@@ -139,6 +143,48 @@ CHANNELS: tuple[Channel, ...] = (
         unsupported_physics=("per-layer moduli and thicknesses",
                              "interface toughness of each pair"),
         requires=("two or more metal layers",),
+    ),
+    Channel(
+        channel_id="wide_metal_slotting",
+        mechanism="a continuous span of wide metal carries the stiffness "
+                  "mismatch across its whole extent; slotting breaks the span, "
+                  "and Rabie lists wide-metal slotting among the layout levers",
+        references=("rabie2018cpi",),
+        observable="wide-metal area fraction that is not slotted, from a "
+                   "morphological opening at the declared wide-metal width",
+        inputs=("unslotted_wide_metal_fraction",),
+        two_sided=False, scope="layer",
+        unsupported_physics=("stiffness contrast at the wide-metal boundary",
+                             "package-level warpage", "EMC and underfill CTE"),
+        requires=("a declared wide_width_um",),
+        note="Unslotted wide metal, not wide metal. Ranking wide-metal "
+             "fraction alone would flag a correctly slotted plate exactly as "
+             "hard as an unbroken one, which inverts the lever: slotting is "
+             "the recommended state, so its presence must lower the score. "
+             "Can co-fire with corner_metal_tiles on top-layer geometry near "
+             "a die corner; that is one piece of geometry seen through two of "
+             "Rabie's levers, not two independent observations.",
+    ),
+    Channel(
+        channel_id="corner_metal_tiles",
+        mechanism="corner metal tiling is the first of Rabie's die-corner "
+                  "levers: unbroken top metal at the die corner couples the "
+                  "package corner load straight into the stack",
+        references=("rabie2018cpi",),
+        observable="unslotted wide-metal fraction on the topmost metal layer, "
+                   "inside the die-corner region",
+        inputs=("unslotted_wide_metal_fraction",),
+        two_sided=False, scope="layer", top_layer_only=True,
+        needs_die_frame=True,
+        conditional_on="distance_to_nearest_corner", conditional_invert=True,
+        unsupported_physics=("EMC thickness", "underfill CTE and modulus",
+                             "package warpage", "corner bump stiffness"),
+        requires=("a declared die outline",),
+        note="Top layer only and corner only, because that is the lever as "
+             "stated. Scored on every layer it would assert something about "
+             "the layers beneath that the reference does not; scored die-wide "
+             "it would be the wide_metal_slotting channel under a second "
+             "citation.",
     ),
     Channel(
         channel_id="routing_in_bump_frame",

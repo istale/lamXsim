@@ -31,6 +31,7 @@ EVIDENCE_CLASS = EvidenceClass.GDS_GEOMETRY
 
 FEATURES = ("wide_metal_fraction", "wide_metal_perimeter_density",
             "slot_density", "slotted_metal_fraction",
+            "unslotted_wide_metal_fraction",
             "fill_density", "fill_fraction")
 
 
@@ -66,13 +67,32 @@ class StructureExtractor:
                 slots.insert(db.Box(min(xs), min(ys), max(xs), max(ys)))
                 slot_points.append(((min(xs) + max(xs)) / 2 * self.u.dbu,
                                     (min(ys) + max(ys)) / 2 * self.u.dbu))
+        # Wide metal belonging to shapes that carry no slot at all. Rabie's
+        # lever is slotting, so the recommended state has to lower the score:
+        # ranking wide-metal fraction alone flags a correctly slotted plate as
+        # hard as an unbroken one, which inverts the lever.
+        #
+        # The split is per polygon, not per window. A window-level version --
+        # zero the cell if any slot centroid lands in it -- takes only two
+        # values per layer, so every cell ties and the channel can never
+        # report anything. Per polygon it is an area fraction that varies
+        # across windows, which is what a percentile rank needs. A shape
+        # slotted at one end is excluded along its whole length, so the
+        # measure under-reports rather than over-reports.
+        unslotted = db.Region()
+        for poly in region.each():
+            if poly.holes() == 0:
+                unslotted.insert(poly)
+        unslotted.merge()
+
         out = (region, wide, wide.edges(),
-               np.array(slot_points, dtype=float).reshape(-1, 2))
+               np.array(slot_points, dtype=float).reshape(-1, 2),
+               unslotted.sized(-h).sized(h))
         self._cache[spec.key] = out
         return out
 
     def extract(self, spec: LayerSpec, grid: Grid) -> dict[str, np.ndarray]:
-        region, wide, wide_edges, slot_points = self._derived(spec)
+        region, wide, wide_edges, slot_points, unslotted = self._derived(spec)
         n = len(grid)
         out = {k: np.zeros(n) for k in FEATURES}
         if region.is_empty():
@@ -97,6 +117,7 @@ class StructureExtractor:
             if s_region.is_empty():
                 continue
             s_wide = wide & strip_box
+            s_unslotted = unslotted & strip_box
             s_edges = wide_edges & strip_box
             s_fill = fill_region & strip_box
 
@@ -110,6 +131,9 @@ class StructureExtractor:
 
                 out["wide_metal_fraction"][i] = (
                     wide_area / metal_area if metal_area > 0 else 0.0)
+                out["unslotted_wide_metal_fraction"][i] = (
+                    u.area_dbu2_to_um2((s_unslotted & win).area()) / metal_area
+                    if metal_area > 0 else 0.0)
                 out["wide_metal_perimeter_density"][i] = (
                     u.length_dbu_to_um((s_edges & win).length()) / c.area_um2)
                 out["fill_density"][i] = fill_area / c.area_um2
@@ -128,7 +152,7 @@ class StructureExtractor:
         return out
 
     def extract_roi(self, spec: LayerSpec, x0, y0, x1, y1) -> dict[str, float]:
-        region, wide, wide_edges, slot_points = self._derived(spec)
+        region, wide, wide_edges, slot_points, unslotted = self._derived(spec)
         u = self.u
         win = db.Region(db.Box(u.um_to_dbu(x0), u.um_to_dbu(y0),
                                u.um_to_dbu(x1), u.um_to_dbu(y1)))
@@ -151,6 +175,9 @@ class StructureExtractor:
             "slot_density": count / area,
             "slotted_metal_fraction":
                 (wide_area / metal_area if count and metal_area else 0.0),
+            "unslotted_wide_metal_fraction":
+                (u.area_dbu2_to_um2((unslotted & win).area()) / metal_area
+                 if metal_area else 0.0),
             "fill_density": fill_area / area,
             "fill_fraction": fill_area / total if total > 0 else 0.0,
         }
