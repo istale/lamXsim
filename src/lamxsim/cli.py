@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -196,8 +197,8 @@ def cmd_run(args) -> int:
 
     # -- analysis ----------------------------------------------------
     footprints = manifest.footprint_set(reader, bbox)
-    res = pipeline.run(
-        args.gds, failures, layers=manifest.metal_layers,
+    run_kwargs = dict(
+        layers=manifest.metal_layers,
         via_layers=manifest.via_layers, package_layers=manifest.package_layers,
         footprints=footprints, min_coverage=manifest.min_coverage,
         die_bbox=bbox, top_cell=manifest.top_cell,
@@ -211,6 +212,31 @@ def cmd_run(args) -> int:
         seed=args.seed,
         allow_pooling_modes=args.allow_pooling_modes,
         allow_failures_outside_footprint=args.allow_failures_outside_footprint)
+
+    if args.stratify_by:
+        strat = pipeline.run_stratified(
+            args.gds, failures, stratify_by=tuple(args.stratify_by),
+            min_failures=args.min_stratum_failures, **run_kwargs)
+        print(f"\nstratified by {list(args.stratify_by)}: "
+              f"{len(strat)} population(s) analysed")
+        if not strat.consistency.empty:
+            disagree = strat.consistency[~strat.consistency.signs_agree]
+            print(f"  features whose effect reverses between strata: "
+                  f"{len(disagree)}")
+            if len(disagree):
+                print("  (pooling these would cancel two real effects into none)")
+                print(disagree[["feature", "layer", "scale_um", "strata"]]
+                      .head(8).to_string(index=False))
+        out = Path(args.outdir) / "reports"
+        out.mkdir(parents=True, exist_ok=True)
+        strat.consistency.to_csv(out / "stratum_consistency.csv", index=False)
+        for name, sub in strat.per_stratum.items():
+            safe = re.sub(r"\W+", "_", name)
+            sub.metadata["manifest"] = manifest.report()
+            pipeline.write_results(sub, Path(args.outdir) / f"stratum_{safe}")
+        res = next(iter(strat.per_stratum.values()))
+    else:
+        res = pipeline.run(args.gds, failures, **run_kwargs)
     res.metadata["manifest"] = manifest.report()
     if registration_report is not None:
         res.metadata["registration"] = registration_report
@@ -456,6 +482,13 @@ def main(argv=None) -> int:
     rn.add_argument("--block-um", type=float, default=300.0,
                     help="spatial CV block and buffer size")
     rn.add_argument("--n-folds", type=int, default=5)
+    rn.add_argument("--stratify-by", nargs="+", default=None,
+                    metavar="COLUMN",
+                    help="analyse each failure population separately, e.g. "
+                         "failed_interface. Pooling mechanisms that differ can "
+                         "cancel two real effects into none")
+    rn.add_argument("--min-stratum-failures", type=int, default=20,
+                    help="strata smaller than this are skipped and named")
     rn.add_argument("--allow-failures-outside-footprint", action="store_true",
                     help="continue when a failure lies outside the inspected "
                          "footprint; those failures are dropped and the "

@@ -171,6 +171,42 @@ part of the schema, a file mixing modes is refused, and pooling can be asserted
 — `--allow-pooling-modes` — with the assertion recorded in the run metadata as
 the operator's judgement rather than a property of the data.
 
+## Pooling mechanisms can cancel two real effects into none
+
+`--stratify-by failed_interface` analyses each failure population separately
+and reports how far they agree. Li et al. (2023) found the largest energy
+release rate at one particular upper BEOL interface, with bottom interconnect
+interfaces more critical than sidewalls, and Zahedmanesh & Vanstreels (2019)
+show a stiff top group *lowering* the crack driving force beneath it -- so the
+same geometry helping on one interface and hurting on another is the expected
+shape, not a contrived one.
+
+On a die carrying both:
+
+| | ROC-AUC | effect | q |
+|---|---|---|---|
+| pooled | 0.587 | +0.175 | **0.234 — no finding** |
+| M8/ULK | 0.809 | **+0.619** | 2e-11 |
+| M8/CAP | 0.310 | **−0.381** | 8e-05 |
+
+Two strong opposite effects, pooled into nothing. The consistency table puts
+sign disagreement first, because a feature pointing one way on one mechanism
+and the other way on another is not one effect measured twice — and telling
+those apart is what separates a mechanism from a proxy for one.
+
+## Traceability is enforced, not requested
+
+`references/feature_evidence_map.csv` carries, per feature family, the
+physical hypothesis, the supporting paper and evidence type, the exact GDS
+observable and unit, the expected confounders, a named discrimination test, a
+falsification condition, where it is implemented, whether it is primary or
+exploratory, and what further evidence would promote it from an association to
+an engineering rule.
+
+Every feature the pipeline reports is matched against that registry, and one
+with no entry is named in the run metadata. A checklist nothing enforces is a
+wish: the check found four families added two commits earlier that had none.
+
 ## One population per die, and one layout for all of them
 
 Inspection footprints are declared per die, with a default for the rest. A
@@ -571,10 +607,6 @@ direction, PI-opening edge and corner distance, crackstop rail distance, pad
 edge distance, and wide metal, slotting and declared dummy fill as their own
 family. Not yet expressed: pad overlap fraction and PI-opening shape
 descriptors.
-
-**Failure mode is checked, not used.** `failed_layer` and `failed_interface`
-are in the schema and a file mixing them is refused, but they cannot yet
-stratify a single analysis -- the interfaces have to be run separately.
 
 **Deliberately not built.** Sections 4G-4I (connectivity, largest structures,
 empty area) are `exploratory` tier with no direct delamination evidence, so

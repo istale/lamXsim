@@ -318,3 +318,31 @@ def map_to_grid_per_die(failures: FailureSet, grid, *,
         out[str(key)] = map_to_grid(subset, grid, radius_um=radius_um)
     return out
 
+
+def stratify(failures: FailureSet, by=("failed_interface",)
+             ) -> dict[str, FailureSet]:
+    """Split a failure set into the populations a mode column defines.
+
+    Li et al. (2023) found the largest energy release rate at one particular
+    upper BEOL interface, with bottom interconnect interfaces more critical
+    than sidewalls. Analysing those together asks whether a feature associates
+    with "failure" in general; analysing them apart asks whether it associates
+    with each mechanism, and whether it does so in the same direction -- which
+    is the question that distinguishes a mechanism from a proxy.
+    """
+    from dataclasses import replace as _replace
+
+    present = [c for c in by if c in failures.table]
+    if not present:
+        return {"<all>": failures}
+
+    keys = (failures.table[present].astype(str)
+            .agg("|".join, axis=1).rename("stratum"))
+    out = {}
+    for key in sorted(keys.unique()):
+        out[str(key)] = _replace(
+            failures,
+            table=failures.table[keys == key].reset_index(drop=True),
+            notes=list(failures.notes) + [f"stratum {key} of {present}"])
+    return out
+

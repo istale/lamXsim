@@ -55,6 +55,7 @@ def _covers(outer, inner, tol: float = 1e-6) -> bool:
 
 def _is_roi(die, geometry, tol: float = 1e-6) -> bool:
     return (die.width > geometry.width + tol or die.height > geometry.height + tol)
+from . import registry as registry_mod
 from . import report as report_mod
 from .stats import fdr, permutation, univariate
 
@@ -507,6 +508,8 @@ def run(gds_path: str, failures: FailureSet, *,
         "failure_modes": failures.modes(),
         "failure_layout_revisions": failures.layout_revisions(),
         "gds_sha256": _file_digest(gds_path),
+        "feature_registry": registry_mod.audit(
+            [r["feature"] for r in rows]),
         "failures_simulated": failures.simulated,
         "failure_source": failures.source,
         "failure_notes": failures.notes,
@@ -555,3 +558,99 @@ def write_results(result: RunResult, outdir: str | Path) -> dict[str, str]:
     p.write_text(json.dumps(result.metadata, indent=2))
     paths["metadata"] = str(p)
     return paths
+
+
+@dataclass
+class StratifiedResult:
+    """One run per failure population, plus how far they agree."""
+    per_stratum: dict[str, RunResult]
+    consistency: pd.DataFrame
+    strata_by: tuple[str, ...]
+
+    def __len__(self) -> int:
+        return len(self.per_stratum)
+
+
+def run_stratified(gds_path: str, failures: FailureSet, *,
+                   stratify_by=("failed_interface",),
+                   min_failures: int = 20, **kwargs) -> StratifiedResult:
+    """Analyse each failure population separately and compare them.
+
+    Pooling modes asks whether a feature associates with failure in general.
+    Splitting them asks whether it associates with each mechanism, and whether
+    it does so in the same direction -- which is what separates a mechanism
+    from a proxy for one. A feature that reverses sign between interfaces is
+    not a weaker version of one that does not; it is a different finding.
+
+    Strata with fewer than ``min_failures`` are skipped rather than analysed
+    into noise, and named in the result so the omission is visible.
+    """
+    from .labels.failure import stratify as _stratify
+
+    groups = _stratify(failures, stratify_by)
+    results, skipped = {}, {}
+    for name, subset in groups.items():
+        if len(subset) < min_failures:
+            skipped[name] = len(subset)
+            continue
+        results[name] = run(gds_path, subset, **kwargs)
+
+    for r in results.values():
+        r.metadata["strata_skipped_for_size"] = skipped
+        r.metadata["strata_analysed"] = sorted(results)
+
+    return StratifiedResult(per_stratum=results,
+                            consistency=_consistency(results),
+                            strata_by=tuple(stratify_by))
+
+
+def _consistency(results: dict[str, RunResult]) -> pd.DataFrame:
+    """Per feature, how the strata compare.
+
+    ``signs_agree`` is the question Gate 4 asks of dies, applied to
+    mechanisms: an effect that points one way on one interface and the other
+    way on another is not a single effect measured twice.
+    """
+    if len(results) < 2:
+        return pd.DataFrame()
+
+    frames = []
+    for name, res in results.items():
+        if res.associations.empty:
+            continue
+        keep = res.associations[["feature", "layer", "scale_um", "effect_size",
+                                 "roc_auc", "fdr_q_value", "n_case"]].copy()
+        keep["stratum"] = name
+        frames.append(keep)
+    if len(frames) < 2:
+        return pd.DataFrame()
+
+    joined = pd.concat(frames, ignore_index=True)
+    rows = []
+    for (feature, layer, scale), group in joined.groupby(
+            ["feature", "layer", "scale_um"]):
+        if len(group) < 2:
+            continue
+        effects = group["effect_size"].to_numpy(float)
+        finite = effects[np.isfinite(effects)]
+        if len(finite) < 2:
+            continue
+        signs = np.sign(finite)
+        rows.append({
+            "feature": feature, "layer": layer, "scale_um": scale,
+            "n_strata": len(finite),
+            "effect_min": float(finite.min()), "effect_max": float(finite.max()),
+            "effect_spread": float(finite.max() - finite.min()),
+            "signs_agree": bool(np.all(signs == signs[0])),
+            "min_q": float(group["fdr_q_value"].min()),
+            "strata": "; ".join(f"{s}={e:+.3f}" for s, e in
+                                zip(group["stratum"], group["effect_size"])),
+        })
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    # Disagreement first: a feature pointing opposite ways on two mechanisms
+    # is the thing a reader most needs to see.
+    return out.sort_values(["signs_agree", "effect_spread"],
+                           ascending=[True, False])
+
