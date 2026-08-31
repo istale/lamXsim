@@ -342,7 +342,21 @@ def objects_for(reader: LayoutReader, spec: LayerSpec | None, *, kind: str,
 #: one-to-one, by containment or by nearest centroid, and the three disagree
 #: exactly where the layout is interesting -- an offset pad, a missing bump, a
 #: bump serving two pads.
-MATCH_RULES = ("containment", "nearest", "one_to_one")
+MATCH_RULES = ("centroid_containment", "full_containment", "nearest",
+               "one_to_one")
+
+#: Rejected outright rather than mapped to one of the two. The bare word was
+#: this module's own name for what is really centroid containment, and the
+#: comments claimed the stricter thing -- a bump can hang most of the way out
+#: of a pad and still be matched, as long as its centre is inside. Both
+#: semantics are defensible and they differ exactly on the offset placements
+#: worth looking at, so the manifest has to choose.
+AMBIGUOUS_MATCH_RULES = {
+    "containment": "centroid_containment or full_containment -- the first "
+                   "asks whether the secondary's centre is inside the "
+                   "primary, the second whether all of it is, and they "
+                   "disagree on precisely the offset placements a "
+                   "concentricity study is about"}
 
 
 @dataclass(frozen=True)
@@ -383,17 +397,26 @@ def match(primaries: list[ShapeObject], secondaries: list[ShapeObject],
     attached -- two pads both pointing at ``bump:0``, each row naming the
     one-to-one rule, is the rule being reported and not applied.
 
-    ``containment`` is polygon containment. Judging it by a circle of equal
-    area, as this did, mismatches every non-compact shape: a 200x10 um bar pad
-    and a 40x40 um square have the same equivalent radius and contain
-    completely different sets of points.
+    Containment comes in two flavours and the manifest has to say which.
+    ``centroid_containment`` asks whether the secondary's centre lies inside
+    the primary polygon; ``full_containment`` asks whether all of it does.
+    A bump hanging most of the way out of its pad passes the first and fails
+    the second, which is exactly the placement a concentricity study is
+    about. The bare name ``containment`` is refused rather than mapped to
+    either. (Both are polygon tests: an earlier version compared the centroid
+    against a circle of the primary's equivalent area, so a 200x10 um bar pad
+    and a 40x40 um square -- same equivalent radius, completely different sets
+    of points -- were treated alike.)
     """
+    if rule in AMBIGUOUS_MATCH_RULES:
+        raise ValueError(f"the matching rule {rule!r} is ambiguous; declare "
+                         f"{AMBIGUOUS_MATCH_RULES[rule]}")
     if rule not in MATCH_RULES:
         raise ValueError(f"unknown object matching rule {rule!r}; "
                          f"declare one of {list(MATCH_RULES)} in the manifest")
     if not primaries or not secondaries:
         return []
-    if rule == "containment" and polygons is None:
+    if rule.endswith("containment") and polygons is None:
         raise ValueError(
             "the containment rule needs the polygons themselves, and only "
             "centroids were passed. Containment judged from a centroid and an "
@@ -412,10 +435,15 @@ def match(primaries: list[ShapeObject], secondaries: list[ShapeObject],
         best = int(order[0])
         ambiguity = ""
 
-        if rule == "containment":
-            inside = [i for i in range(len(secondaries))
-                      if _point_in_polygon(sx[i], sy[i], primary_polys[index],
-                                           dbu)]
+        if rule.endswith("containment"):
+            if rule == "centroid_containment":
+                inside = [i for i in range(len(secondaries))
+                          if _point_in_polygon(sx[i], sy[i],
+                                               primary_polys[index], dbu)]
+            else:
+                inside = [i for i in range(len(secondaries))
+                          if _fully_inside(secondary_polys[i],
+                                           primary_polys[index])]
             if not inside:
                 continue
             if len(inside) > 1:
@@ -463,6 +491,11 @@ def match(primaries: list[ShapeObject], secondaries: list[ShapeObject],
 def _point_in_polygon(x_um: float, y_um: float, poly, dbu: float) -> bool:
     """Is this point inside the drawn polygon, holes included?"""
     return poly.inside(db.Point(int(round(x_um / dbu)), int(round(y_um / dbu))))
+
+
+def _fully_inside(secondary_poly, primary_poly) -> bool:
+    """Does none of the secondary lie outside the primary?"""
+    return (db.Region(secondary_poly) - db.Region(primary_poly)).is_empty()
 
 
 def _overlap_fraction(primary_poly, secondary_poly, dbu: float) -> float:
@@ -650,28 +683,117 @@ def crackstop_structure(reader: LayoutReader, spec: LayerSpec | None,
         continuity_ratio=continuity, n_gaps=n_gaps)
 
 
+def crackstop_width_map(reader: LayoutReader, spec: LayerSpec | None, grid,
+                        *, probe_multiple: float = 2.0) -> "np.ndarray | None":
+    """The seal ring's local drawn width, per grid cell, NaN off the ring.
+
+    This replaces a quadrant broadcast that could not produce a candidate at
+    all. Giving each quadrant its corner's width puts a quarter of the die on
+    one value, and a quarter of the cells tied sit at the 88th percentile --
+    below the 95th the atlas selects at, however narrow that corner is. The
+    channel was live, scored, and structurally incapable of reporting
+    anything.
+
+    A width check returns, for every place narrower than its threshold, the
+    pair of edges and the distance between them. Probed at a multiple of the
+    ring's own median width, every location on the ring is reported with its
+    actual width, so this is the local width and not a summary of it. Cells
+    the ring does not pass through stay NaN, so the ranking compares ring to
+    ring rather than ring to empty silicon -- and a pinch is located where it
+    is, not attributed to a quadrant.
+
+    The projected metric, again: measured corner to corner every re-entrant
+    corner is two edges a vanishing distance apart, so a Euclidian check
+    reports every corner of every ring as its narrowest place.
+    """
+    if spec is None:
+        return None
+    region = reader.region(spec)
+    if region.is_empty():
+        return None
+    u = reader.units
+
+    # A typical width, not the narrowest one, and not a single width check
+    # over the whole ring. Two attempts failed here for different reasons and
+    # both are worth keeping written down:
+    #
+    # * probing at twice the *narrowest* width sees only the pinch, so a ring
+    #   pinched from 8um to 3um produced one cell -- and a percentile rank
+    #   needs two values, so the channel reported nothing on exactly the die
+    #   it was built to find;
+    # * a single width check over the ring returns one edge pair per
+    #   uninterrupted run, so a 1160um rail contributes one sample at its
+    #   midpoint. Four samples for four sides is not a map.
+    #
+    # For a thin closed ring, area is width times centreline length and
+    # perimeter is twice that length, so 2*area/perimeter recovers the typical
+    # width and is unmoved by a short pinch. The map is then built per cell.
+    area = region.area() * u.dbu * u.dbu
+    perimeter = sum(abs(poly.perimeter()) for poly in region.each()) * u.dbu
+    typical = (2.0 * area / perimeter) if perimeter > 0 else 0.0
+    if typical <= 0:
+        return None
+
+    # One width check over the whole ring, and each violation is assigned to
+    # every cell its own extent covers. No clipping: measuring a clipped piece
+    # made the answer depend on where the clip fell, and a clip edge beside
+    # the notch reported 2.925um for a 3.000um pinch. Using the pair's extent
+    # keeps the measurement on the drawn geometry and still covers the ring --
+    # a uniform rail contributes one pair spanning the whole side, so every
+    # cell along it gets that side's width, and the pinch contributes a short
+    # pair that overrides its own cells.
+    threshold = max(u.um_to_dbu(typical * probe_multiple), 2)
+    out = np.full(len(grid), np.nan)
+    dbu = u.dbu
+    for pair in region.width_check(threshold, False, db.Region.Projection).each():
+        a, b = pair.first, pair.second
+        width = pair.distance() * dbu
+        x0 = min(a.x1, a.x2, b.x1, b.x2) * dbu
+        x1 = max(a.x1, a.x2, b.x1, b.x2) * dbu
+        y0 = min(a.y1, a.y2, b.y1, b.y2) * dbu
+        y1 = max(a.y1, a.y2, b.y1, b.y2) * dbu
+        for cell in grid.cells:
+            if cell.x1 <= x0 or cell.x0 >= x1 or cell.y1 <= y0 or cell.y0 >= y1:
+                continue
+            current = out[cell.cell_id]
+            # The narrowest place in the cell, not the mean: a rail that is
+            # wide for most of a window and pinched in one spot is pinched.
+            if not np.isfinite(current) or width < current:
+                out[cell.cell_id] = width
+    return out if np.isfinite(out).any() else None
+
+
 def corner_topology(reader: LayoutReader, spec: LayerSpec | None,
-                    die_bbox: BBox | None, *, window_um: float = 100.0
+                    die_bbox: BBox | None, *, window_um: float | None = None
                     ) -> dict:
-    """The seal ring at each die corner, which is where Rabie's lever is.
+    """The seal ring at each of *its own* corners.
 
     A ring measured as a whole says nothing about its corners, and the corner
-    is where the package load turns. Per corner: how many rails pass through
-    the window, how narrow the narrowest gets there, and how many separate
-    pieces there are -- a corner that is bridged differently from the sides is
-    exactly the topology the lever is about.
+    is where the package load turns.
+
+    The window is placed on the ring's corners and sized from the ring, not
+    fixed at the die corner. A ring inset 150 um from the die edge fell
+    entirely outside a hardcoded 100 um window at the die corner: all four
+    corners reported zero pieces and a NaN width, the channel stayed
+    "available", and the run said nothing about it. When the window still
+    catches nothing the result says so rather than returning quiet NaNs.
     """
-    if spec is None or die_bbox is None:
+    if spec is None:
         return {}
     region = reader.region(spec)
     if region.is_empty():
         return {}
     u = reader.units
+    box = region.bbox()
+    ring = BBox(box.left * u.dbu, box.bottom * u.dbu,
+                box.right * u.dbu, box.top * u.dbu)
+    if window_um is None:
+        # A tenth of the shorter side: large enough to hold the corner turn
+        # and its approach, small enough not to be most of a side.
+        window_um = max(min(ring.width, ring.height) / 10.0, 1.0)
     out = {}
-    corners = {"ll": (die_bbox.xmin, die_bbox.ymin),
-               "lr": (die_bbox.xmax, die_bbox.ymin),
-               "ul": (die_bbox.xmin, die_bbox.ymax),
-               "ur": (die_bbox.xmax, die_bbox.ymax)}
+    corners = {"ll": (ring.xmin, ring.ymin), "lr": (ring.xmax, ring.ymin),
+               "ul": (ring.xmin, ring.ymax), "ur": (ring.xmax, ring.ymax)}
     for name, (cx, cy) in corners.items():
         box = db.Box(u.um_to_dbu(cx - window_um), u.um_to_dbu(cy - window_um),
                      u.um_to_dbu(cx + window_um), u.um_to_dbu(cy + window_um))
@@ -687,6 +809,12 @@ def corner_topology(reader: LayoutReader, spec: LayerSpec | None,
     pieces = [v["n_pieces"] for v in out.values()]
     return {
         "per_corner": out,
+        "window_um": window_um,
+        "undefined_reason": ("" if narrowest else
+                             f"no crackstop geometry fell inside a "
+                             f"{window_um:g}um window at any corner of the "
+                             f"ring itself, so nothing corner-resolved was "
+                             f"measured"),
         "corner_narrowest_um": float(min(narrowest)) if narrowest else float("nan"),
         "corner_piece_count_max": int(max(pieces)) if pieces else 0,
         # A corner drawn differently from the others is the thing worth

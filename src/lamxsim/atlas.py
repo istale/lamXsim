@@ -391,7 +391,7 @@ def _object_table(gds_path: str, manifest, die_bbox) -> pd.DataFrame:
     if not manifest.package_layers.any_present:
         return pd.DataFrame()
     reader = LayoutReader(gds_path, top_cell=manifest.top_cell)
-    table, matches = package_context.object_table(
+    table, matches, extra = package_context.object_table(
         reader, manifest.package_layers, manifest.shape_semantics, die_bbox)
 
     matched = {}
@@ -418,9 +418,48 @@ def _object_table(gds_path: str, manifest, die_bbox) -> pd.DataFrame:
                 "radial_offset_um": float("nan"),
                 "tangential_offset_um": float("nan"),
                 "overlap_fraction": float("nan")}))
+            if kind == "crackstop":
+                row.update(_crackstop_columns(extra))
             row["geometry"] = "drawn, plan view; not manufactured"
             rows.append(row)
     return pd.DataFrame(rows)
+
+
+def _crackstop_columns(extra: dict) -> dict:
+    """The structure facts, on the crackstop rows that claim to carry them.
+
+    The channel note and the limits document both said rail count, continuity
+    and the per-corner figures were in this file. They were computed, they
+    were in the feature maps, and the crackstop row here held only the generic
+    shape columns -- a traceability claim that the final output did not
+    consume.
+    """
+    structure = extra.get("structure")
+    topology = extra.get("corner_topology") or {}
+    out = {}
+    if structure is not None:
+        out.update({
+            "rail_count": structure.n_rails,
+            "rail_width_min_um": structure.rail_width_min_um,
+            "rail_width_median_um": structure.rail_width_median_um,
+            "rail_width_p10_um": structure.rail_width_p10_um,
+            "rail_spacing_um": structure.rail_spacing_um,
+            "n_components": structure.n_components,
+            "continuity_ratio": structure.continuity_ratio,
+            "n_gaps": structure.n_gaps,
+            "structure_undefined_reason": structure.undefined_reason,
+        })
+    if topology:
+        out["corner_window_um"] = topology.get("window_um", float("nan"))
+        out["corner_narrowest_um"] = topology.get("corner_narrowest_um",
+                                                  float("nan"))
+        out["corner_asymmetry_um"] = topology.get("corner_asymmetry",
+                                                  float("nan"))
+        out["corner_undefined_reason"] = topology.get("undefined_reason", "")
+        for name, values in (topology.get("per_corner") or {}).items():
+            out[f"corner_{name}_narrowest_um"] = values["narrowest_um"]
+            out[f"corner_{name}_pieces"] = values["n_pieces"]
+    return out
 
 
 def _traceability(atlas: Atlas) -> pd.DataFrame:
@@ -727,9 +766,13 @@ def _limits_document(atlas: Atlas, manifest, overlay: dict) -> str:
         "footprint, and the failed layer or interface. "
         "`unsupported_non_gds_physics.csv` lists the package and material "
         "quantities that no GDS contains and that a study must hold fixed, "
-        "stratify, or measure; `unimplemented_gds_observables.csv` lists the "
-        "ones that are in the layout and simply are not extracted yet, which "
-        "is a different kind of gap and a much cheaper one to close.",
+        "stratify, or measure. `unimplemented_gds_observables.csv` carries "
+        "everything else this atlas does not cover, with a status on every "
+        "row: `absent` when nothing of it is implemented, `partial` when a "
+        "channel covers part of it -- the row names that channel and says "
+        "which part is still missing -- and `not_recoverable` when no layout "
+        "can supply it at all. The last are listed anyway, because each has a "
+        "GDS-derived proxy nearby that is easy to mistake for it.",
         "",
         "Run `lamxsim phase0` for how many failure sites the association "
         "analysis would need before it could say anything at all.",

@@ -307,6 +307,7 @@ SHAPE_FEATURES = (
     "crackstop_rail_width_min_um", "crackstop_rail_count",
     "crackstop_continuity_ratio", "crackstop_n_gaps",
     "crackstop_corner_narrowest_um", "crackstop_corner_asymmetry",
+    "crackstop_local_width_um",
 )
 
 
@@ -331,12 +332,17 @@ def object_table(reader: LayoutReader, layers: PackageLayers,
                                       polarity=polarity, die_bbox=die_bbox)
         polys[kind] = (list(obj.region_for(reader, spec, polarity).each())
                        if spec is not None else [])
-    # The crackstop is a structure rather than an array of objects, so it has
-    # its own row shape; it is carried here so the object table can hold every
-    # package object the manifest names and not a subset of them.
+    # The crackstop is a structure rather than an array of objects. Its
+    # polygons are described like any other, and the structure facts -- rail
+    # count, continuity, gap count, per-corner width -- are returned beside
+    # them so the writer can attach them. Returning only the polygons put a
+    # crackstop row in the table with none of the numbers the channel and the
+    # docs said were there.
     table["crackstop"] = obj.objects_for(
         reader, layers.crackstop, kind="crackstop",
         polarity=semantics.polarity_of("crackstop"), die_bbox=die_bbox)
+    structure = obj.crackstop_structure(reader, layers.crackstop, die_bbox)
+    topology = obj.corner_topology(reader, layers.crackstop, die_bbox)
 
     matches = {}
     rule = semantics.object_matching
@@ -350,7 +356,7 @@ def object_table(reader: LayoutReader, layers: PackageLayers,
             table[primary], table[secondary], rule=rule, die_bbox=die_bbox,
             tolerance_um=tol,
             polygons=both if all(both) else None, dbu=reader.units.dbu)
-    return table, matches
+    return table, matches, {"structure": structure, "corner_topology": topology}
 
 
 def _outermost_flag(bumps, tolerance_um: float = 1.0) -> np.ndarray:
@@ -401,7 +407,7 @@ def extract_shapes(grid, die_bbox: BBox | None, reader: LayoutReader,
     if not layers.any_present:
         return out
 
-    table, matches = object_table(reader, layers, semantics, die_bbox)
+    table, matches, _ = object_table(reader, layers, semantics, die_bbox)
 
     bumps = table["bump"]
     if bumps:
@@ -482,21 +488,28 @@ def extract_shapes(grid, die_bbox: BBox | None, reader: LayoutReader,
                 ("crackstop_n_gaps", float(structure.n_gaps))):
             out[name] = np.full(n, value, dtype=float)
 
-    # Corner-resolved, which is what can be ranked within a die and is where
-    # the lever is. Each cell carries its own die corner's figures, so a
-    # corner drawn narrower than the other three is locatable.
+    # Corner-resolved figures, reported per cell of the quadrant they belong
+    # to. These compare die rather than locate within one -- a quarter of the
+    # cells sharing a value sits at the 88th percentile whatever the value is
+    # -- so no channel ranks them; they travel as features.
     topology = obj.corner_topology(reader, layers.crackstop, die_bbox)
-    if topology:
+    if topology and not topology["undefined_reason"]:
         per_corner = topology["per_corner"]
-        mx = (die_bbox.xmin + die_bbox.xmax) / 2
-        my = (die_bbox.ymin + die_bbox.ymax) / 2
+        mx = (die_bbox.xmin + die_bbox.xmax) / 2 if die_bbox else 0.0
+        my = (die_bbox.ymin + die_bbox.ymax) / 2 if die_bbox else 0.0
         narrowest = np.full(n, np.nan)
         for cell in grid.cells:
-            key = ("l" if cell.x_center < mx else "r")
-            key = ("l" if cell.y_center < my else "u") + key
-            key = {"ll": "ll", "lr": "lr", "ul": "ul", "ur": "ur"}[key]
+            key = ("l" if cell.y_center < my else "u") + \
+                  ("l" if cell.x_center < mx else "r")
             narrowest[cell.cell_id] = per_corner[key]["narrowest_um"]
         out["crackstop_corner_narrowest_um"] = narrowest
         out["crackstop_corner_asymmetry"] = np.full(
             n, topology["corner_asymmetry"], dtype=float)
+
+    # The local width where the ring actually runs. This is the one that can
+    # be ranked within a die: NaN off the ring, so the comparison is ring
+    # against ring, and a pinch is located where it is.
+    local = obj.crackstop_width_map(reader, layers.crackstop, grid)
+    if local is not None:
+        out["crackstop_local_width_um"] = local
     return out

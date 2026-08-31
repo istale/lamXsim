@@ -46,6 +46,13 @@ class Channel:
     #: the literature recommends having more of it. Ranking such a channel
     #: two-sided would score the recommended design as exposed.
     invert: bool = False
+    #: Inputs whose departure is at the low end, where the channel's own
+    #: ``invert`` is not the right answer for all of them. One flag shared by
+    #: every input is wrong wherever a channel reads two quantities pointing
+    #: opposite ways -- a narrowest width, where low is the departure, beside
+    #: an asymmetry, where high is. Naming the inputs makes the direction a
+    #: property of the observable rather than of the channel.
+    invert_inputs: tuple[str, ...] = ()
     #: Optional gate: a cell is only a candidate where this feature is in the
     #: top ``conditional_percentile`` of the die. The 20 nm study locates the
     #: global loading at the outermost bumps first and only then compares
@@ -75,6 +82,21 @@ class Channel:
     top_layer_only: bool = False
     requires: tuple[str, ...] = ()
     note: str = ""
+
+
+def _validate_channels(channels) -> None:
+    """Every named direction has to name a real input of that channel.
+
+    A typo here would silently fall back to the channel-wide flag, which is
+    the behaviour the field exists to replace.
+    """
+    for channel in channels:
+        unknown = set(channel.invert_inputs) - set(channel.inputs)
+        if unknown:
+            raise ValueError(
+                f"{channel.channel_id}: invert_inputs names {sorted(unknown)}, "
+                f"which {'is' if len(unknown) == 1 else 'are'} not among its "
+                f"inputs {list(channel.inputs)}")
 
 
 CHANNELS: tuple[Channel, ...] = (
@@ -239,23 +261,25 @@ CHANNELS: tuple[Channel, ...] = (
                   "whether it is continuous -- not about how far a cell is "
                   "from it",
         references=("rabie2018cpi",),
-        observable="drawn narrowest rail width at each die corner, and how "
-                   "much the four corners differ from each other",
-        inputs=("crackstop_corner_narrowest_um", "crackstop_corner_asymmetry"),
+        observable="the seal ring's local drawn width, per analysis window, "
+                   "measured where the ring actually runs",
+        inputs=("crackstop_local_width_um",),
         two_sided=False, invert=True, scope="die",
         unsupported_physics=("crack arrest effectiveness", "interface "
                              "toughness at the ring", "dicing damage"),
         requires=("a crackstop layer",),
-        note="Corner-resolved on purpose. Rail width, rail count and "
-             "continuity for the ring as a whole are one fact about the die: "
-             "broadcast to every cell they cannot be ranked within it, so a "
-             "channel reading them can only ever report nothing. They are "
-             "still extracted and written to package_objects.csv, where they "
-             "are the right shape for comparing die. What can be ranked "
-             "within one die is the corner, which is where Rabie's lever is "
-             "and where the package load turns. Inverted: a narrow or "
-             "asymmetric corner is the departure. Distance to the crackstop "
-             "is a different feature and stays separate.",
+        note="A local width map, because two coarser versions of this "
+             "channel could not report anything at all. A whole-ring number "
+             "broadcast to every cell has no variation to rank; a per-quadrant "
+             "corner width puts a quarter of the die on one value, and a "
+             "quarter of the cells tied sit at the 88th percentile, below the "
+             "95th the atlas selects at, however narrow that corner is. The "
+             "width where the ring actually runs ranks ring against ring and "
+             "points at the pinch. Inverted: narrow is the departure. Rail "
+             "count, continuity, gap count and the per-corner figures are "
+             "still extracted -- they compare die rather than locate within "
+             "one, and they are in package_objects.csv for that. Distance to "
+             "the crackstop is a different feature and stays separate.",
     ),
     Channel(
         channel_id="routing_in_bump_frame",
@@ -452,8 +476,10 @@ def evaluate(channel: Channel, features: dict[str, np.ndarray],
     # input's top tail -- on two uncorrelated inputs that is close to twice the
     # intended fraction, while the report says "top 5%". Re-ranking makes the
     # stated fraction true.
-    ranks = {c: _percentile_rank(features[c], channel.two_sided,
-                                 invert=channel.invert) for c in used}
+    ranks = {c: _percentile_rank(
+        features[c], channel.two_sided,
+        invert=(c in channel.invert_inputs) if channel.invert_inputs
+        else channel.invert) for c in used}
     stacked = np.vstack([ranks[c] for c in used])
     all_nan = np.all(~np.isfinite(stacked), axis=0)
     strongest = np.full(stacked.shape[1], np.nan)
@@ -487,6 +513,9 @@ def evaluate_all(features: dict[str, np.ndarray], n_cells: int
         result.excluded_by_condition = ~mask
         out.append(result)
     return out
+
+
+_validate_channels(CHANNELS)
 
 
 def tie_compression_note(result: ChannelResult, threshold: float) -> str:

@@ -165,7 +165,7 @@ class ShapeSemantics:
     #: kind -> "positive" (the polygon is the object) or "opening" (the
     #: polygon is a hole in a film).
     polarity: dict = field(default_factory=dict)
-    object_matching: str = "containment"
+    object_matching: str = "centroid_containment"
     match_tolerance_um: float | None = None
     #: Target plan-view interior angle for a pad corner, where the literature
     #: recommends a shape. 135 is the regular octagon.
@@ -182,14 +182,20 @@ class ShapeSemantics:
         return self.polarity.get(kind, self.DEFAULT_POLARITY.get(kind, "positive"))
 
     def validate(self) -> None:
-        from .features.objects import MATCH_RULES
+        from .features.objects import AMBIGUOUS_MATCH_RULES, MATCH_RULES
 
+        if self.object_matching in AMBIGUOUS_MATCH_RULES:
+            raise ValueError(
+                f"layout.object_matching is {self.object_matching!r}, which is "
+                f"ambiguous; declare "
+                f"{AMBIGUOUS_MATCH_RULES[self.object_matching]}")
         if self.object_matching not in MATCH_RULES:
             raise ValueError(
                 f"layout.object_matching is {self.object_matching!r}; declare "
-                f"one of {list(MATCH_RULES)}. The three disagree exactly where "
-                "the layout is interesting -- an offset pad, a missing bump, "
-                "one bump serving two pads -- so it cannot be guessed.")
+                f"one of {list(MATCH_RULES)}. They disagree exactly where the "
+                "layout is interesting -- an offset pad, a bump hanging over "
+                "a pad edge, a missing bump, one bump serving two pads -- so "
+                "it cannot be guessed.")
         for kind, value in self.polarity.items():
             if value not in ("positive", "opening"):
                 raise ValueError(
@@ -287,7 +293,8 @@ class StudyManifest:
         semantics = ShapeSemantics(
             polarity={k: v["polarity"] for k, v in pkg_cfg.items()
                       if isinstance(v, dict) and "polarity" in v},
-            object_matching=str(layout.get("object_matching", "containment")),
+            object_matching=str(layout.get("object_matching",
+                                           "centroid_containment")),
             match_tolerance_um=(float(layout["match_tolerance_um"])
                                 if layout.get("match_tolerance_um") is not None
                                 else None),

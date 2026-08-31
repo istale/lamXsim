@@ -51,11 +51,18 @@ layout:
     pi_opening: {name: PI, layer: 61, datatype: 0, polarity: opening}
     crackstop: {name: CS, layer: 62, datatype: 0, polarity: positive}
 
-  # How a pad is attached to its bump, and an opening to its pad. The three
-  # rules disagree exactly where the layout is interesting -- an offset pad, a
-  # missing bump, one bump serving two pads -- so this is declared, not
-  # guessed. One of: containment, nearest, one_to_one.
-  object_matching: containment
+  # How a pad is attached to its bump, and an opening to its pad. The rules
+  # disagree exactly where the layout is interesting -- an offset pad, a bump
+  # hanging over a pad edge, a missing bump, one bump serving two pads -- so
+  # this is declared, not guessed. One of:
+  #   centroid_containment  the secondary's centre is inside the primary
+  #   full_containment      all of the secondary is inside the primary
+  #   nearest               nearest centroid, within match_tolerance_um
+  #   one_to_one            nearest, and mutually so; non-mutual pairs are
+  #                         dropped rather than reported with a note
+  # The bare word "containment" is refused: the first two differ exactly on
+  # the offset placements a concentricity study is about.
+  object_matching: centroid_containment
   # match_tolerance_um: 50.0        # for nearest / one_to_one
 
   # The shape a recommendation is measured against, because nothing in a

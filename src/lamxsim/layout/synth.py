@@ -523,7 +523,8 @@ def radial_routing_die(path: str, *, die_um: float = 3000.0,
 
 def shape_variation_die(path: str, *, die_um: float = 1200.0,
                         pitch: float = 300.0, margin: float = 150.0,
-                        pad_r: float = 60.0, odd_sites=((0, 0),)):
+                        pad_r: float = 60.0, odd_sites=((0, 0),),
+                        crackstop_pinch_um: float = 0.0):
     """A die whose pad and PI-opening *shapes* vary from site to site.
 
     The other synthetic dies vary density, pitch and routing direction, which
@@ -576,4 +577,31 @@ def shape_variation_die(path: str, *, die_um: float = 1200.0,
                   density=0.4, vertical=True)
     crackstop_ring(sl, 62, die_um)
     sl.write(path)
+    if crackstop_pinch_um:
+        # One narrow place on the bottom rail, so the crackstop channel has
+        # something to locate. A uniform ring has no variation to rank and
+        # correctly reports nothing, which is a different test.
+        _pinch_crackstop(path, 62, die_um, crackstop_pinch_um)
     return path
+
+
+def _pinch_crackstop(path: str, layer: int, die_um: float, width_um: float,
+                     *, inset: float = 20.0, rail: float = 8.0,
+                     length_um: float = 40.0) -> None:
+    """Cut the bottom rail down to *width_um* over a short run."""
+    layout = db.Layout()
+    layout.read(str(path))
+    top = layout.top_cells()[0]
+    li = layout.layer(layer, 0)
+    u = 1.0 / layout.dbu
+    region = db.Region()
+    region.insert(top.begin_shapes_rec(li))
+    region.merge()
+    cx = die_um / 2
+    cut = db.Region(db.Box(int((cx - length_um / 2) * u),
+                           int((inset + width_um) * u),
+                           int((cx + length_um / 2) * u),
+                           int((inset + rail) * u)))
+    top.shapes(li).clear()
+    top.shapes(li).insert(region - cut)
+    layout.write(str(path))

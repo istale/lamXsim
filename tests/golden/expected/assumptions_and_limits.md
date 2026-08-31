@@ -69,8 +69,8 @@ Every one of the 120 candidate records is a **mechanistic engineering hypothesis
 **crackstop_structure** -- 0 candidate(s), one-sided
   - mechanism: the crackstop lever Rabie reports is about the ring itself -- how wide it is, whether there are two, and whether it is continuous -- not about how far a cell is from it
   - references: rabie2018cpi
-  - observable: drawn narrowest rail width at each die corner, and how much the four corners differ from each other
-  - note: Corner-resolved on purpose. Rail width, rail count and continuity for the ring as a whole are one fact about the die: broadcast to every cell they cannot be ranked within it, so a channel reading them can only ever report nothing. They are still extracted and written to package_objects.csv, where they are the right shape for comparing die. What can be ranked within one die is the corner, which is where Rabie's lever is and where the package load turns. Inverted: a narrow or asymmetric corner is the departure. Distance to the crackstop is a different feature and stays separate.
+  - observable: the seal ring's local drawn width, per analysis window, measured where the ring actually runs
+  - note: A local width map, because two coarser versions of this channel could not report anything at all. A whole-ring number broadcast to every cell has no variation to rank; a per-quadrant corner width puts a quarter of the die on one value, and a quarter of the cells tied sit at the 88th percentile, below the 95th the atlas selects at, however narrow that corner is. The width where the ring actually runs ranks ring against ring and points at the pinch. Inverted: narrow is the departure. Rail count, continuity, gap count and the per-corner figures are still extracted -- they compare die rather than locate within one, and they are in package_objects.csv for that. Distance to the crackstop is a different feature and stays separate.
 
 **routing_in_bump_frame** -- 8 candidate(s), one-sided
   - mechanism: the package loads the layout through the bumps, and diagonal final metal under the corner bumps is one of the documented levers, so routing that is radial or tangential there is the departure
@@ -137,6 +137,6 @@ All feature maps were extracted with KLayout from the GDS directly. `lamxsim cha
 
 ## What would turn this into evidence
 
-Measured failure locations in the same coordinate frame, with lot/wafer/die identity, a registration fiducial set, an inspected footprint, and the failed layer or interface. `unsupported_non_gds_physics.csv` lists the package and material quantities that no GDS contains and that a study must hold fixed, stratify, or measure; `unimplemented_gds_observables.csv` lists the ones that are in the layout and simply are not extracted yet, which is a different kind of gap and a much cheaper one to close.
+Measured failure locations in the same coordinate frame, with lot/wafer/die identity, a registration fiducial set, an inspected footprint, and the failed layer or interface. `unsupported_non_gds_physics.csv` lists the package and material quantities that no GDS contains and that a study must hold fixed, stratify, or measure. `unimplemented_gds_observables.csv` carries everything else this atlas does not cover, with a status on every row: `absent` when nothing of it is implemented, `partial` when a channel covers part of it -- the row names that channel and says which part is still missing -- and `not_recoverable` when no layout can supply it at all. The last are listed anyway, because each has a GDS-derived proxy nearby that is easy to mistake for it.
 
 Run `lamxsim phase0` for how many failure sites the association analysis would need before it could say anything at all.

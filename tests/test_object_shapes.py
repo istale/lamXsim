@@ -182,7 +182,7 @@ def test_matching_records_its_rule_and_its_doubt(tmp_path):
                             polarity="positive", die_bbox=DIE)
 
     matches = obj.match(
-        pads, bumps, rule="containment", die_bbox=DIE,
+        pads, bumps, rule="centroid_containment", die_bbox=DIE,
         polygons=(list(reader.region(LayerSpec("PAD", 81, 0)).each()),
                   list(reader.region(LayerSpec("BUMP", 80, 0)).each())))
     assert len(matches) == 2, "the unmatched pad must not produce a row"
@@ -196,7 +196,7 @@ def test_matching_records_its_rule_and_its_doubt(tmp_path):
     # Quantised to the database unit: a GDS cannot express a finer offset,
     # and leaving the arithmetic tail in gets it ranked.
     assert shifted.centroid_offset_um == pytest.approx(math.hypot(2, 1), abs=1e-3)
-    assert all(m.rule == "containment" for m in matches)
+    assert all(m.rule == "centroid_containment" for m in matches)
 
     with pytest.raises(ValueError, match="unknown object matching rule"):
         obj.match(pads, bumps, rule="whatever_is_closest", die_bbox=DIE)
@@ -314,7 +314,7 @@ def _shape_manifest(path, *, die_um=1200.0, targets=True):
             "pi_opening": {"name": "PI", "layer": 61, "datatype": 0,
                            "polarity": "opening"},
             "crackstop": {"name": "CS", "layer": 62, "datatype": 0}},
-        "object_matching": "containment",
+        "object_matching": "centroid_containment",
     }
     if targets:
         layout["shape_targets"] = {"pad_corner_angle_deg": 135.0,
@@ -551,11 +551,15 @@ def test_containment_is_polygon_containment(tmp_path):
                       bumps[0].y_um - pads[0].y_um) < \
         pads[0].equivalent_diameter_um / 2
     # ...and outside the pad.
-    assert obj.match(pads, bumps, rule="containment", die_bbox=DIE,
+    assert obj.match(pads, bumps, rule="centroid_containment", die_bbox=DIE,
                      polygons=(list(reader.region(LayerSpec("PAD", 81, 0)).each()),
                                list(reader.region(LayerSpec("BUMP", 80, 0)).each()))) == []
 
     with pytest.raises(ValueError, match="needs the polygons"):
+        obj.match(pads, bumps, rule="centroid_containment", die_bbox=DIE)
+
+    # The bare word is refused rather than mapped to either flavour.
+    with pytest.raises(ValueError, match="ambiguous"):
         obj.match(pads, bumps, rule="containment", die_bbox=DIE)
 
 
@@ -580,3 +584,172 @@ def test_one_to_one_drops_a_pair_that_is_not_mutual(tmp_path):
     # "nearest" makes no such promise and is allowed to share the bump.
     nearest = obj.match(pads, bumps, rule="nearest", die_bbox=DIE)
     assert len(nearest) == 2
+
+
+def test_the_two_containment_rules_disagree_where_it_matters(tmp_path):
+    """A bump hanging over its pad edge is the case a study is about.
+
+    Both semantics are defensible; they differ on offset placements, which is
+    precisely what a concentricity study looks for. So the bare word is
+    refused and the manifest has to choose, rather than one being picked and
+    documented as the other.
+    """
+    reader = _write(tmp_path, "hang.gds", {
+        81: [_square(50, 50, 10)],          # 20 x 20 pad
+        80: [_rect(58, 50, 10, 5)]})        # bump centred inside, hanging out
+    pads = obj.objects_for(reader, LayerSpec("PAD", 81, 0), kind="pad",
+                           polarity="positive", die_bbox=DIE)
+    bumps = obj.objects_for(reader, LayerSpec("BUMP", 80, 0), kind="bump",
+                            polarity="positive", die_bbox=DIE)
+    polygons = (list(reader.region(LayerSpec("PAD", 81, 0)).each()),
+                list(reader.region(LayerSpec("BUMP", 80, 0)).each()))
+
+    by_centroid = obj.match(pads, bumps, rule="centroid_containment",
+                            die_bbox=DIE, polygons=polygons)
+    fully = obj.match(pads, bumps, rule="full_containment",
+                      die_bbox=DIE, polygons=polygons)
+    assert len(by_centroid) == 1
+    assert fully == []
+    assert by_centroid[0].overlap_fraction < 1.0
+
+
+def test_the_crackstop_channel_locates_a_pinch(tmp_path):
+    """Two coarser versions of this channel could not report anything.
+
+    A whole-ring number broadcast to every cell has no variation to rank. A
+    per-quadrant corner width puts a quarter of the die on one value, and a
+    quarter of the cells tied sit at the 88th percentile -- below the 95th the
+    atlas selects at, however narrow that corner is. Both were live, scored,
+    and structurally incapable of producing a candidate.
+    """
+    import klayout.db as db
+
+    from lamxsim import atlas
+    from lamxsim.features.grid import build_grid
+    from lamxsim.study import StudyManifest
+
+    u = 1000
+    ring = _ring(400, 8)
+    pinched = ring - db.Region(db.Box(-20 * u, -400 * u, 20 * u, -395 * u))
+    path = _ring_gds(tmp_path / "pinched_ring.gds", [pinched])
+
+    grid = build_grid(BBox(-450.0, -450.0, 450.0, 450.0), 50.0)
+    widths = obj.crackstop_width_map(LayoutReader(path),
+                                     LayerSpec("CS", 62, 0), grid)
+    on_ring = np.isfinite(widths)
+    assert on_ring.sum() < len(widths) / 2, "the ring is not most of the die"
+    assert np.nanmin(widths) == pytest.approx(3.0, abs=0.05)
+
+    # And the narrow place is where it was drawn, not spread over a quadrant.
+    narrow = [grid.cells[i] for i in np.where(widths < 5.0)[0]]
+    assert narrow, "the pinch was not located"
+    assert all(c.y_center < -350.0 and abs(c.x_center) < 60.0 for c in narrow)
+
+
+def test_the_corner_window_follows_the_ring_and_says_when_it_misses(tmp_path):
+    """A ring inset from the die edge fell outside a fixed die-corner window.
+
+    All four corners returned zero pieces and a NaN width, the channel stayed
+    available, and the run said nothing about it.
+    """
+    import klayout.db as db
+
+    u = 1000
+    inset = (db.Region(db.Box(150 * u, 150 * u, 850 * u, 850 * u))
+             - db.Region(db.Box(158 * u, 158 * u, 842 * u, 842 * u)))
+    reader = LayoutReader(_ring_gds(tmp_path / "inset.gds", [inset]))
+    topology = obj.corner_topology(reader, LayerSpec("CS", 62, 0),
+                                   BBox(0.0, 0.0, 1000.0, 1000.0))
+    assert topology["undefined_reason"] == ""
+    assert all(v["n_pieces"] > 0 for v in topology["per_corner"].values())
+    assert topology["corner_narrowest_um"] == pytest.approx(8.0, abs=0.05)
+
+    # Placing the window on the ring rather than on the die makes the old
+    # failure mode nearly unreachable, which is the point. It survives for a
+    # shape whose bounding-box corners hold no metal -- a diamond ring -- and
+    # there the result says so instead of returning quiet NaNs.
+    diamond = db.Region(db.Polygon([
+        db.Point(500 * u, 100 * u), db.Point(900 * u, 500 * u),
+        db.Point(500 * u, 900 * u), db.Point(100 * u, 500 * u)]))
+    diamond -= db.Region(db.Polygon([
+        db.Point(500 * u, 120 * u), db.Point(880 * u, 500 * u),
+        db.Point(500 * u, 880 * u), db.Point(120 * u, 500 * u)]))
+    missed = obj.corner_topology(
+        LayoutReader(_ring_gds(tmp_path / "diamond.gds", [diamond])),
+        LayerSpec("CS", 62, 0), BBox(0.0, 0.0, 1000.0, 1000.0),
+        window_um=20.0)
+    assert "no crackstop geometry" in missed["undefined_reason"]
+
+
+def test_a_channel_can_give_each_input_its_own_direction():
+    """One flag for every input is wrong wherever two point opposite ways.
+
+    The crackstop channel read a narrowest width, where low is the departure,
+    beside an asymmetry, where high is, and inverted both. It has since been
+    rebuilt around a single local width map, so no shipped channel needs mixed
+    directions today -- the mechanism is here so that the next one cannot
+    inherit the same flaw silently.
+    """
+    from lamxsim import exposure
+
+    channel = exposure.Channel(
+        channel_id="mixed", mechanism="test", references=("-",),
+        observable="-", inputs=("low_is_bad", "high_is_bad"),
+        two_sided=False, unsupported_physics=(), invert=False,
+        invert_inputs=("low_is_bad",))
+
+    features = {"low_is_bad": np.array([1.0, 2.0, 3.0, 4.0]),
+                "high_is_bad": np.array([1.0, 2.0, 3.0, 4.0])}
+    result = exposure.evaluate(channel, features, 4)
+    assert result.values["low_is_bad"][0] > result.values["low_is_bad"][-1]
+    assert result.values["high_is_bad"][0] < result.values["high_is_bad"][-1]
+
+    with pytest.raises(ValueError, match="not among its inputs"):
+        exposure._validate_channels([exposure.Channel(
+            channel_id="typo", mechanism="t", references=("-",),
+            observable="-", inputs=("a",), two_sided=False,
+            unsupported_physics=(), invert_inputs=("b",))])
+
+
+def test_the_crackstop_channel_produces_a_candidate_end_to_end(tmp_path):
+    """Not the width map alone: the candidate file, which is what ships.
+
+    Both earlier versions of this channel passed their unit tests -- the
+    per-corner numbers really did differ -- and produced no row in
+    literature_candidates.csv on any die, because a quarter of the cells
+    sharing a value cannot reach the 95th percentile. A test on the
+    descriptors could not see that; only the file can.
+    """
+    from lamxsim import atlas
+    from lamxsim.study import StudyManifest
+
+    gds = synth.shape_variation_die(str(tmp_path / "pinched.gds"),
+                                    crackstop_pinch_um=3.0)
+    manifest = StudyManifest.load(_shape_manifest(tmp_path / "m.yaml"))
+    result = atlas.build(gds, manifest)
+
+    rows = result.candidates[result.candidates.channel == "crackstop_structure"]
+    assert not rows.empty, "a ring pinched to 3um produced no candidate"
+    # At the pinch, on the bottom rail near the middle of the die. Two cells
+    # because the 40um notch straddles a cell boundary, not because the
+    # measurement spreads.
+    assert (rows.y_um < 150.0).all(), sorted(rows.y_um.unique())
+    assert ((rows.x_um - 600.0).abs() < 200.0).all(), sorted(rows.x_um.unique())
+    assert len(rows) <= 3, "the pinch is spreading further than one neighbour"
+
+    widths = result.features["crackstop_local_width_um|-"].to_numpy()
+    on_ring = np.isfinite(widths)
+    assert 20 <= on_ring.sum() <= 40, (
+        f"{on_ring.sum()} cells on the ring; a single width check over the "
+        "whole ring gave four, one per side, which is not a map")
+    assert np.nanmin(widths) == pytest.approx(3.0, abs=0.05)
+
+    # A uniform ring has no variation to rank, and says so rather than
+    # inventing an extreme.
+    uniform = synth.shape_variation_die(str(tmp_path / "uniform.gds"))
+    plain = atlas.build(uniform, manifest)
+    assert plain.candidates[
+        plain.candidates.channel == "crackstop_structure"].empty
+    reasons = [r.reason for cs in plain.channels.values() for _, r in cs
+               if r.channel.channel_id == "crackstop_structure"]
+    assert reasons and all(r for r in reasons)

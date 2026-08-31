@@ -63,7 +63,7 @@ Twelve channels, one per mechanism, each with its citation:
 | `corner_metal_tiles` | unbroken top metal at the die corner | Rabie 2018 |
 | `pad_geometry_departure` | pad shape against a declared target, and pad/bump offset | Rabie 2018 |
 | `pi_opening_shape` | opening size and elongation, two-sided | Li 2023/2025 |
-| `crackstop_structure` | narrowest rail width at the die corners, inverted | Rabie 2018 |
+| `crackstop_structure` | the seal ring's local width where it runs, inverted | Rabie 2018 |
 | `routing_in_bump_frame` | routing not diagonal under corner bumps | Rabie 2018 |
 | `pi_opening_proximity` | stress concentration at the PI opening | Rabie 2018, Li 2023/2025 |
 
@@ -94,7 +94,7 @@ run stays GDS-only.
 layout:
   package_layers:
     pi_opening: {name: PI, layer: 61, datatype: 0, polarity: opening}
-  object_matching: containment          # or nearest / one_to_one
+  object_matching: centroid_containment   # or full_containment / nearest / one_to_one
   shape_targets:
     pad_corner_angle_deg: 135           # a regular octagon
     pi_plan_view_corner_angle_deg: 90
