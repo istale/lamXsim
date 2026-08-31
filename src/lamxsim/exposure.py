@@ -261,10 +261,12 @@ CHANNELS: tuple[Channel, ...] = (
                   "whether it is continuous -- not about how far a cell is "
                   "from it",
         references=("rabie2018cpi",),
-        observable="the seal ring's local drawn width, per analysis window, "
-                   "measured where the ring actually runs",
-        inputs=("crackstop_local_width_um",),
-        two_sided=False, invert=True, scope="die",
+        observable="the seal ring's local drawn width and the length of any "
+                   "break in it, per analysis window, measured where the ring "
+                   "actually runs",
+        inputs=("crackstop_local_width_um", "crackstop_local_gap_um"),
+        two_sided=False, invert=False, invert_inputs=("crackstop_local_width_um",),
+        scope="die",
         unsupported_physics=("crack arrest effectiveness", "interface "
                              "toughness at the ring", "dicing damage"),
         requires=("a crackstop layer",),
@@ -279,7 +281,12 @@ CHANNELS: tuple[Channel, ...] = (
              "count, continuity, gap count and the per-corner figures are "
              "still extracted -- they compare die rather than locate within "
              "one, and they are in package_objects.csv for that. Distance to "
-             "the crackstop is a different feature and stays separate.",
+             "the crackstop is a different feature and stays separate.\n"
+             "The two inputs point opposite ways -- a narrow rail is the "
+             "departure at the low end, a long break at the high end -- which "
+             "is what invert_inputs is for. A break is invisible to the width "
+             "map: where the ring is absent there is nothing to measure, the "
+             "cell is NaN, and NaN is not an extreme.",
     ),
     Channel(
         channel_id="routing_in_bump_frame",

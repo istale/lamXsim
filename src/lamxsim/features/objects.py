@@ -295,32 +295,62 @@ def describe(poly, *, object_id: str, kind: str, source_layer: str,
 
 
 def region_for(reader: LayoutReader, spec: LayerSpec, polarity: str):
-    """The objects on a layer, whichever way round the layer draws them.
+    """The objects on a layer, in the encoding the manifest declares.
 
-    ``positive`` means the polygon is the object. ``opening`` means the
-    polygon is the film and the objects are the holes in it, so the objects
-    are the holes -- extracted here rather than assumed away.
+    ``positive`` -- the polygon is the object.
+    ``film_holes`` -- the polygon is the film and the objects are its holes.
+    ``positive_openings`` -- the polygons are the openings, drawn directly.
 
-    This is the difference between measuring a 40x40 um opening and measuring
-    the 200x200 um film around it. Declaring the polarity and then describing
-    the drawn polygon either way gives the same wrong answer with a correct
-    label on it, which is worse than no label: every PI area, diameter, aspect
-    ratio, orientation and pad match would be computed on the film.
+    The last two used to be one value, ``opening``, resolved by looking at the
+    geometry: holes if any polygon had one, the polygons themselves otherwise.
+    That is a guess, and it fails silently on a layer carrying both encodings
+    -- one film with holes beside a few directly drawn openings -- where every
+    standalone opening is discarded because a hole was found somewhere else.
+    A layer's encoding is a fact about how it was drawn, so it is declared;
+    where the declaration and the geometry disagree, the run stops.
     """
     region = reader.region(spec)
-    if polarity != "opening":
+    if polarity == "positive":
         return region
+
     holes = db.Region()
+    solid = db.Region()
     for poly in region.each():
-        for i in range(poly.holes()):
-            holes.insert(db.Polygon(list(poly.each_point_hole(i))))
-    if holes.is_empty():
-        # A layer declared as openings whose polygons carry no holes is
-        # already drawn as the openings themselves -- the common case, and the
-        # one the golden and synthetic dies use. Nothing to invert.
+        if poly.holes():
+            for i in range(poly.holes()):
+                holes.insert(db.Polygon(list(poly.each_point_hole(i))))
+        else:
+            solid.insert(poly)
+
+    if polarity == "film_holes":
+        if holes.is_empty():
+            raise ValueError(
+                f"{spec} is declared film_holes and no polygon on it has a "
+                "hole, so there are no openings to measure. Either the layer "
+                "draws its openings directly -- declare positive_openings -- "
+                "or the film is not on this layer.")
+        if not solid.is_empty():
+            raise ValueError(
+                f"{spec} is declared film_holes and carries {solid.count()} "
+                "polygon(s) with no hole beside the film. Those are either "
+                "openings drawn directly, in which case the layer mixes two "
+                "encodings and has to be split, or they are something else "
+                "entirely. Guessing here silently discards them.")
+        holes.merge()
+        return holes
+
+    if polarity == "positive_openings":
+        if not holes.is_empty():
+            raise ValueError(
+                f"{spec} is declared positive_openings and carries a polygon "
+                "with a hole. If that polygon is the film, declare "
+                "film_holes; if the layer mixes both encodings it has to be "
+                "split, because one reading discards the other's objects.")
         return region
-    holes.merge()
-    return holes
+
+    raise ValueError(
+        f"unknown polarity {polarity!r} for {spec}; declare positive, "
+        "film_holes or positive_openings")
 
 
 def objects_for(reader: LayoutReader, spec: LayerSpec | None, *, kind: str,
@@ -735,25 +765,35 @@ def crackstop_width_map(reader: LayoutReader, spec: LayerSpec | None, grid,
         return None
 
     # One width check over the whole ring, and each violation is assigned to
-    # every cell its own extent covers. No clipping: measuring a clipped piece
-    # made the answer depend on where the clip fell, and a clip edge beside
-    # the notch reported 2.925um for a 3.000um pinch. Using the pair's extent
-    # keeps the measurement on the drawn geometry and still covers the ring --
-    # a uniform rail contributes one pair spanning the whole side, so every
-    # cell along it gets that side's width, and the pinch contributes a short
-    # pair that overrides its own cells.
+    # the cells its own **corridor** covers -- the quadrilateral between the
+    # two facing edges, which is the strip of material the measurement is
+    # about.
+    #
+    # Not the corridor's bounding box, which was the first version of this. On
+    # an axis-aligned rail the two are nearly the same, so a square seal ring
+    # gave the right answer and every test passed. On a 45-degree ring they
+    # are not: the bounding box of a diagonal corridor is a large square whose
+    # interior is empty silicon, and a uniform diamond ring marked 900 of its
+    # 1024 finite cells off the ring -- values on cells the crackstop does not
+    # touch, under a docstring promising NaN off the ring. Chamfered and
+    # diamond seal rings are ordinary, so this was wrong on real layouts and
+    # right on every fixture.
     threshold = max(u.um_to_dbu(typical * probe_multiple), 2)
     out = np.full(len(grid), np.nan)
     dbu = u.dbu
     for pair in region.width_check(threshold, False, db.Region.Projection).each():
-        a, b = pair.first, pair.second
         width = pair.distance() * dbu
-        x0 = min(a.x1, a.x2, b.x1, b.x2) * dbu
-        x1 = max(a.x1, a.x2, b.x1, b.x2) * dbu
-        y0 = min(a.y1, a.y2, b.y1, b.y2) * dbu
-        y1 = max(a.y1, a.y2, b.y1, b.y2) * dbu
+        corridor = db.Region(pair.polygon(0))
+        box = corridor.bbox()
+        x0, y0 = box.left * dbu, box.bottom * dbu
+        x1, y1 = box.right * dbu, box.top * dbu
         for cell in grid.cells:
             if cell.x1 <= x0 or cell.x0 >= x1 or cell.y1 <= y0 or cell.y0 >= y1:
+                continue
+            cell_box = db.Region(db.Box(
+                u.um_to_dbu(cell.x0), u.um_to_dbu(cell.y0),
+                u.um_to_dbu(cell.x1), u.um_to_dbu(cell.y1)))
+            if (corridor & cell_box).is_empty():
                 continue
             current = out[cell.cell_id]
             # The narrowest place in the cell, not the mean: a rail that is
@@ -761,6 +801,89 @@ def crackstop_width_map(reader: LayoutReader, spec: LayerSpec | None, grid,
             if not np.isfinite(current) or width < current:
                 out[cell.cell_id] = width
     return out if np.isfinite(out).any() else None
+
+
+def crackstop_gap_map(reader: LayoutReader, spec: LayerSpec | None, grid,
+                      *, max_gap_um: float | None = None,
+                      support: "np.ndarray | None" = None
+                      ) -> "np.ndarray | None":
+    """Where the seal ring is interrupted, and by how much, per grid cell.
+
+    A break cannot be found by the width map: where the ring is absent there
+    is nothing to measure, so the cell is NaN and NaN is not an extreme. The
+    ring's continuity ratio and gap count say a break exists somewhere and
+    cannot say where, so a cut ring produced whole-ring numbers and no
+    locatable candidate.
+
+    The gap itself is the space between two rail ends, which is a spacing
+    check on the ring against itself. Each violation is assigned to the cells
+    its corridor covers, exactly as the width map is, so the candidate lands
+    on the break rather than near it.
+
+    The value is the gap length in um -- larger is worse, the opposite
+    direction to the width map, which is what the channel's per-input
+    direction is for -- and it is **zero** where the ring is continuous, not
+    NaN. That matters: a die with one break has one cell with a gap, and a
+    percentile rank over a single value is undefined, so a map that was NaN
+    everywhere else could never rank the break. Zero on the rest of the ring
+    makes the population "every point on the ring", where a break is the
+    extreme it should be. ``support`` supplies that population, normally the
+    width map's own.
+    """
+    if spec is None:
+        return None
+    region = reader.region(spec)
+    if region.is_empty():
+        return None
+    u = reader.units
+
+    area = region.area() * u.dbu * u.dbu
+    perimeter = sum(abs(poly.perimeter()) for poly in region.each()) * u.dbu
+    typical = (2.0 * area / perimeter) if perimeter > 0 else 0.0
+    if typical <= 0:
+        return None
+    # The probe has to reach past the rail width -- a 40 um break in an 8 um
+    # rail is five times it -- and stop well short of the ring's own inner
+    # opening, which is the die and is not a defect. Twenty rail widths, capped
+    # at a quarter of the ring's shorter side.
+    box = region.bbox()
+    shorter = min(box.width(), box.height()) * u.dbu
+    ceiling = shorter / 4.0
+    limit = max_gap_um if max_gap_um is not None else min(typical * 20.0, ceiling)
+    if limit <= 0 or limit >= shorter:
+        return None
+    threshold = max(u.um_to_dbu(limit), 2)
+
+    out = (np.where(np.isfinite(support), 0.0, np.nan)
+           if support is not None else np.full(len(grid), np.nan))
+    dbu = u.dbu
+    # notch_check is spacing within one polygon, which is what a break in a
+    # ring is: cutting a closed ring leaves one C-shaped polygon, not two, so
+    # an inter-polygon spacing check finds nothing. space_check adds the case
+    # where the ring is drawn, or cut, into separate pieces.
+    violations = list(region.notch_check(threshold, False,
+                                         db.Region.Projection).each())
+    if region.count() > 1:
+        violations += list(region.space_check(threshold, False,
+                                              db.Region.Projection).each())
+    for pair in violations:
+        gap = pair.distance() * dbu
+        corridor = db.Region(pair.polygon(0))
+        box = corridor.bbox()
+        x0, y0 = box.left * dbu, box.bottom * dbu
+        x1, y1 = box.right * dbu, box.top * dbu
+        for cell in grid.cells:
+            if cell.x1 <= x0 or cell.x0 >= x1 or cell.y1 <= y0 or cell.y0 >= y1:
+                continue
+            cell_box = db.Region(db.Box(
+                u.um_to_dbu(cell.x0), u.um_to_dbu(cell.y0),
+                u.um_to_dbu(cell.x1), u.um_to_dbu(cell.y1)))
+            if (corridor & cell_box).is_empty():
+                continue
+            current = out[cell.cell_id]
+            if not np.isfinite(current) or gap > current:
+                out[cell.cell_id] = gap
+    return out if (np.isfinite(out) & (out > 0)).any() else None
 
 
 def corner_topology(reader: LayoutReader, spec: LayerSpec | None,

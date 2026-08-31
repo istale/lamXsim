@@ -307,7 +307,7 @@ SHAPE_FEATURES = (
     "crackstop_rail_width_min_um", "crackstop_rail_count",
     "crackstop_continuity_ratio", "crackstop_n_gaps",
     "crackstop_corner_narrowest_um", "crackstop_corner_asymmetry",
-    "crackstop_local_width_um",
+    "crackstop_local_width_um", "crackstop_local_gap_um",
 )
 
 
@@ -512,4 +512,12 @@ def extract_shapes(grid, die_bbox: BBox | None, reader: LayoutReader,
     local = obj.crackstop_width_map(reader, layers.crackstop, grid)
     if local is not None:
         out["crackstop_local_width_um"] = local
+
+    # And where it is interrupted. A break cannot be found by the width map:
+    # where the ring is absent there is nothing to measure, the cell is NaN,
+    # and NaN is not an extreme -- so a cut ring produced whole-ring numbers
+    # and no locatable candidate.
+    gaps = obj.crackstop_gap_map(reader, layers.crackstop, grid, support=local)
+    if gaps is not None:
+        out["crackstop_local_gap_um"] = gaps
     return out

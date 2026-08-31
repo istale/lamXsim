@@ -530,10 +530,11 @@ UNIMPLEMENTED_GDS_OBSERVABLES = (
     ("crackstop", "rail-to-rail spacing beyond the outermost pair, and the "
      "connectivity graph inside a corner window",
      "rabie2018cpi", "partial", ("crackstop_structure",),
-     "narrowest width, rail count, continuity, gap count and the per-corner "
-     "narrowest and asymmetry are extracted; a stack of three or more rails "
-     "reports only the outer spacing, and a corner is summarised by width and "
-     "piece count rather than by how its rails are bridged"),
+     "the local width and the length of any break are mapped per window and "
+     "are what the channel ranks; rail count, continuity, gap count and the "
+     "per-corner figures are extracted for comparing die. A stack of three or "
+     "more rails reports only the outer spacing, and a corner is summarised "
+     "by width and piece count rather than by how its rails are bridged"),
     ("shape measurement", "an object-level quantisation declared per layer "
      "rather than taken from the database unit",
      "-", "absent", (),

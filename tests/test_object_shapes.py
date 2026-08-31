@@ -154,7 +154,7 @@ def test_pi_shape_is_plan_view_only(tmp_path):
     reader = _write(tmp_path, "pi.gds", {
         61: [_rect(60, 60, 20, 5), _octagon(140, 140, math.sqrt(400 / 2.828))]})
     openings = obj.objects_for(reader, LayerSpec("PI", 61, 0),
-                               kind="pi_opening", polarity="opening",
+                               kind="pi_opening", polarity="positive_openings",
                                die_bbox=DIE)
     elongated = next(o for o in openings if o.x_um < 100)
     round_ish = next(o for o in openings if o.x_um > 100)
@@ -163,7 +163,7 @@ def test_pi_shape_is_plan_view_only(tmp_path):
     assert round_ish.n_convex_corners == 8 and round_ish.n_concave_corners == 0
     assert round_ish.circularity > elongated.circularity
     for o in openings:
-        assert o.polarity == "opening"
+        assert o.polarity == "positive_openings"
         assert "no Z information" in o.definitions["angles"]
 
 
@@ -312,7 +312,7 @@ def _shape_manifest(path, *, die_um=1200.0, targets=True):
             "bump": {"name": "BUMP", "layer": 60, "datatype": 0},
             "pad": {"name": "PAD", "layer": 64, "datatype": 0},
             "pi_opening": {"name": "PI", "layer": 61, "datatype": 0,
-                           "polarity": "opening"},
+                           "polarity": "positive_openings"},
             "crackstop": {"name": "CS", "layer": 62, "datatype": 0}},
         "object_matching": "centroid_containment",
     }
@@ -518,19 +518,36 @@ def test_polarity_inverts_the_geometry_and_not_only_the_label(tmp_path):
     positive = obj.objects_for(reader, spec, kind="pi_opening",
                                polarity="positive", die_bbox=DIE)[0]
     opening = obj.objects_for(reader, spec, kind="pi_opening",
-                              polarity="opening", die_bbox=DIE)[0]
+                              polarity="film_holes", die_bbox=DIE)[0]
     assert positive.area_um2 == pytest.approx(200 * 200 - 40 * 40)
     assert opening.area_um2 == pytest.approx(40 * 40)
     assert opening.equivalent_diameter_um < positive.equivalent_diameter_um
 
-    # A layer declared as openings whose polygons have no holes is already
-    # drawn as the openings; nothing to invert, and nothing lost.
+    # Openings drawn directly are their own encoding, and it is declared
+    # rather than inferred from whether a hole happens to be present.
     drawn = _ring_gds(tmp_path / "drawn.gds",
                       [db.Region(db.Box(80 * u, 80 * u, 120 * u, 120 * u))],
                       layer=61)
     direct = obj.objects_for(LayoutReader(drawn), spec, kind="pi_opening",
-                             polarity="opening", die_bbox=DIE)[0]
+                             polarity="positive_openings", die_bbox=DIE)[0]
     assert direct.area_um2 == pytest.approx(40 * 40)
+
+    # A declaration the geometry contradicts stops the run. Guessing from the
+    # geometry silently discarded one encoding's objects on a layer carrying
+    # both: a film with holes beside a directly drawn opening lost the latter.
+    with pytest.raises(ValueError, match="draws its openings directly"):
+        obj.objects_for(LayoutReader(drawn), spec, kind="pi_opening",
+                        polarity="film_holes", die_bbox=DIE)
+    with pytest.raises(ValueError, match="polygon with a hole"):
+        obj.objects_for(reader, spec, kind="pi_opening",
+                        polarity="positive_openings", die_bbox=DIE)
+
+    mixed = _ring_gds(tmp_path / "mixed.gds",
+                      [film, db.Region(db.Box(300 * u, 300 * u,
+                                              340 * u, 340 * u))], layer=61)
+    with pytest.raises(ValueError, match="mixes two"):
+        obj.objects_for(LayoutReader(mixed), spec, kind="pi_opening",
+                        polarity="film_holes", die_bbox=DIE)
 
 
 def test_containment_is_polygon_containment(tmp_path):
@@ -753,3 +770,122 @@ def test_the_crackstop_channel_produces_a_candidate_end_to_end(tmp_path):
     reasons = [r.reason for cs in plain.channels.values() for _, r in cs
                if r.channel.channel_id == "crackstop_structure"]
     assert reasons and all(r for r in reasons)
+
+
+def _diamond(radius_um, wall_um, cx=500.0, cy=500.0, dbu=0.001):
+    """A 45-degree seal ring. Chamfered and diamond rings are ordinary."""
+    import klayout.db as db
+
+    u = 1 / dbu
+
+    def rhombus(r):
+        return db.Region(db.Polygon([
+            db.Point(int(cx * u), int((cy - r) * u)),
+            db.Point(int((cx + r) * u), int(cy * u)),
+            db.Point(int(cx * u), int((cy + r) * u)),
+            db.Point(int((cx - r) * u), int(cy * u))]))
+
+    return rhombus(radius_um) - rhombus(radius_um - wall_um)
+
+
+def test_the_width_map_stays_on_a_forty_five_degree_ring(tmp_path):
+    """The corridor, not its bounding box.
+
+    On an axis-aligned rail the two are nearly the same, so a square seal ring
+    gave the right answer and every test passed. The bounding box of a
+    diagonal corridor is a large square whose interior is empty silicon: a
+    uniform diamond ring marked 900 of its 1024 finite cells off the ring,
+    under a docstring promising NaN off the ring.
+    """
+    import klayout.db as db
+
+    from lamxsim.features.grid import build_grid
+
+    path = _ring_gds(tmp_path / "diamond.gds", [_diamond(400.0, 12.0)])
+    reader = LayoutReader(path)
+    spec = LayerSpec("CS", 62, 0)
+    region = reader.region(spec)
+    units = reader.units
+    grid = build_grid(BBox(0.0, 0.0, 1000.0, 1000.0), 25.0)
+
+    widths = obj.crackstop_width_map(reader, spec, grid)
+    assert widths is not None
+
+    on_ring, marked_off_ring = 0, 0
+    for i, cell in enumerate(grid.cells):
+        box = db.Region(db.Box(
+            units.um_to_dbu(cell.x0), units.um_to_dbu(cell.y0),
+            units.um_to_dbu(cell.x1), units.um_to_dbu(cell.y1)))
+        touches = not (region & box).is_empty()
+        on_ring += touches
+        if np.isfinite(widths[i]) and not touches:
+            marked_off_ring += 1
+
+    assert marked_off_ring == 0, f"{marked_off_ring} cells off the ring"
+    assert int(np.isfinite(widths).sum()) == on_ring
+    # Shrinking a rhombus by 12um of radius leaves a perpendicular wall of
+    # 12/sqrt(2): the measurement is across the rail, not along an axis.
+    assert np.nanmax(widths) == pytest.approx(12.0 / math.sqrt(2), abs=0.2)
+
+
+def test_a_break_in_the_ring_is_located(tmp_path):
+    """A gap is invisible to the width map, and that is not a detail.
+
+    Where the ring is absent there is nothing to measure, the cell is NaN, and
+    NaN is not an extreme -- so a cut ring produced whole-ring numbers, a gap
+    count, and no candidate anywhere. Cutting a closed ring also leaves one
+    C-shaped polygon, not two, so a spacing check between polygons finds
+    nothing either; the break is a notch inside one polygon.
+    """
+    import klayout.db as db
+
+    from lamxsim.features.grid import build_grid
+
+    u = 1000
+    ring = (db.Region(db.Box(100 * u, 100 * u, 900 * u, 900 * u))
+            - db.Region(db.Box(108 * u, 108 * u, 892 * u, 892 * u)))
+    grid = build_grid(BBox(0.0, 0.0, 1000.0, 1000.0), 50.0)
+    spec = LayerSpec("CS", 62, 0)
+
+    whole_path = _ring_gds(tmp_path / "whole.gds", [ring])
+    support = obj.crackstop_width_map(LayoutReader(whole_path), spec, grid)
+    whole = obj.crackstop_gap_map(LayoutReader(whole_path), spec, grid,
+                                  support=support)
+    assert whole is None, "an unbroken ring must not report a gap"
+
+    cut_region = ring - db.Region(db.Box(480 * u, 90 * u, 520 * u, 110 * u))
+    assert cut_region.count() == 1, "the cut ring is one C-shaped polygon"
+    cut_path = _ring_gds(tmp_path / "cut.gds", [cut_region])
+    cut_support = obj.crackstop_width_map(LayoutReader(cut_path), spec, grid)
+    gaps = obj.crackstop_gap_map(LayoutReader(cut_path), spec, grid,
+                                 support=cut_support)
+    assert gaps is not None
+    # Zero along the rest of the ring, not NaN: a percentile rank over a
+    # single value is undefined, so a map that was NaN everywhere else could
+    # never rank the one break it exists to find.
+    assert (gaps[np.isfinite(gaps)] == 0.0).sum() > 10
+    assert np.nanmax(gaps) == pytest.approx(40.0, abs=0.1)
+    located = [grid.cells[i] for i in np.where(gaps > 0)[0]]
+    assert all(c.y_center < 200 and abs(c.x_center - 500) < 100 for c in located)
+
+
+def test_the_crackstop_channel_reads_two_inputs_in_opposite_directions(tmp_path):
+    """A narrow rail is low, a long break is high, and both are departures."""
+    from lamxsim import exposure
+
+    channel = next(c for c in exposure.CHANNELS
+                   if c.channel_id == "crackstop_structure")
+    assert set(channel.inputs) == {"crackstop_local_width_um",
+                                   "crackstop_local_gap_um"}
+    assert channel.invert_inputs == ("crackstop_local_width_um",)
+
+    n = 6
+    features = {
+        "crackstop_local_width_um": np.array([3.0, 8, 8, 8, 8, 8]),
+        "crackstop_local_gap_um": np.array([0.0, 0, 0, 0, 0, 40.0]),
+    }
+    result = exposure.evaluate(channel, features, n)
+    # The narrow cell and the broken cell are both at the top.
+    assert result.percentile[0] == pytest.approx(np.nanmax(result.percentile))
+    assert result.percentile[5] == pytest.approx(np.nanmax(result.percentile))
+    assert result.percentile[2] < result.percentile[0]

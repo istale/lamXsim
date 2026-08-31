@@ -162,8 +162,9 @@ class ShapeSemantics:
     statements about the layout, not extra measurement data, so requiring them
     keeps the run GDS-only.
     """
-    #: kind -> "positive" (the polygon is the object) or "opening" (the
-    #: polygon is a hole in a film).
+    #: kind -> "positive" (the polygon is the object), "film_holes" (the
+    #: polygon is a film and the objects are its holes) or
+    #: "positive_openings" (the polygons are the openings, drawn directly).
     polarity: dict = field(default_factory=dict)
     object_matching: str = "centroid_containment"
     match_tolerance_um: float | None = None
@@ -175,8 +176,14 @@ class ShapeSemantics:
     pi_plan_view_corner_angle_deg: float | None = None
     corner_angle_tolerance_deg: float = 5.0
 
+    #: The PI opening defaults to being drawn directly, which is the common
+    #: delivery. A layer that draws the passivation film and leaves the
+    #: openings as holes has to say so: the two readings discard each other's
+    #: objects, and no geometry test can tell a film from an opening without
+    #: being told which it is looking at.
     DEFAULT_POLARITY = {"bump": "positive", "pad": "positive",
-                        "pi_opening": "opening", "crackstop": "positive"}
+                        "pi_opening": "positive_openings",
+                        "crackstop": "positive"}
 
     def polarity_of(self, kind: str) -> str:
         return self.polarity.get(kind, self.DEFAULT_POLARITY.get(kind, "positive"))
@@ -197,12 +204,16 @@ class ShapeSemantics:
                 "a pad edge, a missing bump, one bump serving two pads -- so "
                 "it cannot be guessed.")
         for kind, value in self.polarity.items():
-            if value not in ("positive", "opening"):
+            if value not in ("positive", "film_holes", "positive_openings"):
                 raise ValueError(
                     f"layout.package_layers.{kind}.polarity is {value!r}; it "
-                    "must be 'positive' (the polygon is the object) or "
-                    "'opening' (the polygon is a hole in a film). Getting it "
-                    "backwards inverts every distance measured from that layer.")
+                    "must be 'positive' (the polygon is the object), "
+                    "'film_holes' (the polygon is a film and the objects are "
+                    "its holes) or 'positive_openings' (the polygons are the "
+                    "openings, drawn directly). 'opening' is no longer "
+                    "accepted: it covered the last two and was resolved by "
+                    "looking at the geometry, which discards one encoding's "
+                    "objects when a layer carries both.")
         for name, value in (("pad_corner_angle_deg", self.pad_corner_angle_deg),
                             ("pi_plan_view_corner_angle_deg",
                              self.pi_plan_view_corner_angle_deg)):
