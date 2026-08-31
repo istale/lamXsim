@@ -219,6 +219,63 @@ def cmd_characterize(args) -> int:
     return 0
 
 
+def cmd_budget(args) -> int:
+    """Measure extraction cost on a clip and project it to the full chip."""
+    from . import budget as budget_mod
+
+    manifest = StudyManifest.load(args.manifest)
+    polygons, per_layer = budget_mod.count_polygons(args.gds, manifest)
+    print(f"clip     : {args.gds}")
+    for name, count in sorted(per_layer.items(), key=lambda kv: -kv[1]):
+        print(f"  {name:8s} {count:12,d} merged polygon(s)")
+    print(f"  {'total':8s} {polygons:12,d}")
+    if polygons == 0:
+        print("\nNo geometry on any layer the manifest analyses. Check the "
+              "layer numbers before measuring anything.")
+        return 1
+
+    m = budget_mod.measure(args.gds, manifest)
+    print(f"\nmeasured : {m.seconds:.1f}s over {m.scales} scale(s), "
+          f"{m.cells:,d} window(s), peak RSS "
+          f"{m.peak_rss_bytes / 1e9:.2f} GB")
+    print(f"  {m.seconds_per_polygon_scale * 1e6:.1f} us per polygon per scale")
+    print(f"  {m.bytes_per_polygon / 1e3:.2f} kB per polygon")
+
+    if not args.full_chip_polygons:
+        print("\nPass --full-chip-polygons to project. Count them the same "
+              "way this does -- merged, on the layers the manifest analyses -- "
+              "or run this command on the full layout's layers alone.")
+        return 0
+
+    p = m.project(args.full_chip_polygons, len(manifest.scales_um))
+    print(f"\nprojected for {p['polygons']:,d} polygon(s) at "
+          f"{p['scales']} scale(s):")
+    print(f"  time      {p['hours']:.1f} hour(s)")
+    print(f"  peak RSS  {p['peak_rss_gb']:.0f} GB")
+    print("\nThe projection is linear in two constants measured on this clip "
+          "and this machine. Polygon density, hierarchy depth and the "
+          "fraction of non-Manhattan geometry all move them, so re-measure on "
+          "a clip that resembles the real thing rather than on a corner of it.")
+
+    if p["peak_rss_gb"] > args.available_ram_gb / 2:
+        print(f"\nThis will not fit. {p['peak_rss_gb']:.0f} GB projected "
+              f"against {args.available_ram_gb:g} GB available, and the "
+              "Python path holds every analysed layer merged in memory at "
+              "once -- there is no tiling in it. Memory is the binding "
+              "constraint on a full chip, not time.")
+        print("Generate the Calibre deck instead:")
+        print(f"  lamxsim deck {args.gds} --manifest {args.manifest} "
+              "--outdir deck")
+        print("and run `characterize --features-from deck` once the deck has "
+              "been run and diffed against the emulator.")
+        return 0
+
+    print(f"\nThis fits: {p['peak_rss_gb']:.0f} GB projected against "
+          f"{args.available_ram_gb:g} GB available. Budget "
+          f"{p['hours']:.1f} hour(s) and keep the machine to itself.")
+    return 0
+
+
 def cmd_deck(args) -> int:
     """Generate the Calibre rule deck for a study manifest."""
     from .calibre import svrf
@@ -665,6 +722,22 @@ def main(argv=None) -> int:
                     help="a cell is a candidate on a channel at or above this "
                          "percentile of the die (default 95, i.e. the top 5%%)")
     ch.set_defaults(func=cmd_characterize)
+
+    bg = sub.add_parser(
+        "budget",
+        help="measure extraction cost on a clip and project it to a full chip")
+    bg.add_argument("gds", help="a clip that resembles the real layout, not a "
+                                "corner of it: the projection is linear in "
+                                "constants this measures on it")
+    bg.add_argument("--manifest", default="config/study_manifest.yaml")
+    bg.add_argument("--full-chip-polygons", type=int, default=0,
+                    help="merged polygon count over the analysed layers of the "
+                         "full layout, to project to")
+    bg.add_argument("--available-ram-gb", type=float, default=64.0,
+                    help="RAM the run may use (default 64). The projection is "
+                         "compared against half of it, because the peak is a "
+                         "peak")
+    bg.set_defaults(func=cmd_budget)
 
     dk = sub.add_parser("deck", help="generate the Calibre rule deck")
     dk.add_argument("gds", help="the layout this deck is for. Its digest, top "

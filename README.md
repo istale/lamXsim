@@ -29,6 +29,15 @@ before applying the pipeline to measured failures. It maps each literature
 claim to its GDS proxy, current code coverage, required human input and the
 conclusions the evidence does not yet support.
 
+To bring this up on a production layout, follow the
+[staged deployment guide](docs/deployment_stages.md). It is five stages, each
+ending in a gate, and it exists because the two things most likely to waste a
+day are a manifest that means something other than you thought and a run that
+cannot fit in memory. On the Python path extraction costs roughly 80 us and
+2 kB per merged polygon per scale, so **memory is the binding constraint on a
+full chip, not time** -- `lamxsim budget` measures both on a clip of your own
+layout and projects, because those constants are not transferable.
+
 ## Why this shape
 
 The spec's phase plan builds every feature (Phases 2–3) before any statistics
@@ -128,6 +137,23 @@ somewhere first. It is not a statistical association, which needs measured
 failures. `unsupported_non_gds_physics.csv` lists per channel what no GDS
 contains; `unimplemented_gds_observables.csv` lists what the layout does contain
 and this code does not extract yet -- a much cheaper gap to close.
+
+### How long will it take, and will it fit
+
+```bash
+PYTHONPATH=src python3 -m lamxsim budget clip.gds --manifest layers.yaml \
+  --full-chip-polygons 100000000 --available-ram-gb 256
+```
+
+Runs the atlas once on a clip, reports the measured microseconds and kilobytes
+per merged polygon, and projects to the polygon count you give it. The
+projection is linear in two constants, and they are properties of your layout
+and your machine rather than of this code -- measure them on a clip that
+resembles the real thing, not on a quiet corner of it.
+
+If the projection does not fit, the answer is the deck below rather than a
+faster machine: the Python path holds every analysed layer merged in memory at
+once and has no tiling.
 
 ### Full-chip: extract with Calibre instead of KLayout
 

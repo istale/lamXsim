@@ -393,16 +393,47 @@ def _percentile_rank(values: np.ndarray, two_sided: bool = False, *,
     return out
 
 
-def _residualise(target: np.ndarray, explained_by: np.ndarray) -> np.ndarray:
-    """Target with the part a linear fit on the other variable removed."""
+#: A regressor whose spread is below this fraction of its own magnitude is
+#: constant as far as any layout is concerned. Below it the fit is a constant
+#: column, which numpy warns about and then answers anyway.
+RESIDUAL_SPREAD_FLOOR = 1e-9
+
+
+def _residualise(target: np.ndarray, explained_by: np.ndarray
+                 ) -> "tuple[np.ndarray, str]":
+    """Target with the part a linear fit on the other variable removed.
+
+    Returns the note as well as the values, because when the fit cannot be
+    made the channel is no longer measuring what its name says and the report
+    has to carry that.
+
+    The guard is on *relative* spread. Testing ``std == 0`` let floating-point
+    dust through: a die of uniform metal density gave a spread of exactly zero
+    and a standard deviation of 5.6e-17, so the fit went ahead on a constant
+    column, numpy printed "Polyfit may be poorly conditioned", and the channel
+    returned a residual computed from a degenerate fit. A user saw a warning
+    they could not act on, attached to a number that was arithmetic noise.
+    """
     ok = np.isfinite(target) & np.isfinite(explained_by)
     out = np.full(len(target), np.nan)
-    if ok.sum() < 3 or np.std(explained_by[ok]) == 0:
+    if ok.sum() < 3:
         out[ok] = target[ok]
-        return out
-    slope, intercept = np.polyfit(explained_by[ok], target[ok], 1)
-    out[ok] = target[ok] - (slope * explained_by[ok] + intercept)
-    return out
+        return out, ("fewer than three cells carry both values, so nothing "
+                     "can be regressed away and the raw perimeter is used")
+
+    x = explained_by[ok]
+    scale = max(float(np.max(np.abs(x))), 1.0)
+    if float(np.ptp(x)) <= RESIDUAL_SPREAD_FLOOR * scale:
+        out[ok] = target[ok]
+        return out, ("metal density does not vary across this die, so there "
+                     "is nothing for it to explain and the raw perimeter is "
+                     "used; the channel degenerates towards a perimeter map "
+                     "and Yoo's result -- that perimeter beats density -- "
+                     "cannot be separated here")
+
+    slope, intercept = np.polyfit(x, target[ok], 1)
+    out[ok] = target[ok] - (slope * x + intercept)
+    return out, ""
 
 
 def condition_mask(channel: Channel, features: dict[str, np.ndarray],
@@ -464,9 +495,8 @@ def evaluate(channel: Channel, features: dict[str, np.ndarray],
             reason = ("metal density unavailable, so the raw perimeter is "
                       "used and the channel degenerates towards a density map")
         else:
-            series = _residualise(features["perimeter_density"],
-                                  features["metal_density"])
-            reason = ""
+            series, reason = _residualise(features["perimeter_density"],
+                                          features["metal_density"])
         combined = _percentile_rank(series, channel.two_sided,
                                     invert=channel.invert)
         reason = "; ".join(x for x in (reason, partial_note) if x)

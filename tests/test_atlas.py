@@ -502,3 +502,41 @@ def test_every_channel_input_is_traceable_to_the_registry():
             assert entry is not None, f"{channel.channel_id}: {feature}"
             assert not entry.missing_trace, (
                 f"{channel.channel_id}: {feature} -> {entry.missing_trace}")
+
+
+def test_a_die_of_uniform_density_says_so_instead_of_warning(recwarn):
+    """A guard on exact zero let floating-point dust through.
+
+    A die of uniform metal density gave a spread of exactly zero and a
+    standard deviation of 5.6e-17, so `std == 0` was false, the fit went ahead
+    on a constant column, numpy printed "Polyfit may be poorly conditioned",
+    and the channel returned a residual computed from a degenerate fit. The
+    user saw a warning they could not act on, attached to a number that was
+    arithmetic noise.
+    """
+    perimeter = np.linspace(0.0, 1.0, 50)
+    constant = np.full(50, 0.4)
+    constant[0] += 1e-17          # the dust that defeated the old guard
+
+    values, note = exposure._residualise(perimeter, constant)
+    assert not recwarn.list, [str(w.message) for w in recwarn.list]
+    assert "does not vary" in note
+    # The raw perimeter is used, so the channel is a perimeter map here and
+    # the note says that rather than the values hiding it.
+    assert np.allclose(values, perimeter)
+
+    varying = np.linspace(0.2, 0.8, 50)
+    residual, clean_note = exposure._residualise(perimeter, varying)
+    assert clean_note == ""
+    assert not np.allclose(residual, perimeter)
+    assert abs(float(np.mean(residual))) < 1e-9
+
+
+def test_the_uniform_density_note_reaches_the_channel_reason():
+    channel = next(c for c in exposure.CHANNELS
+                   if c.channel_id == "perimeter_at_matched_density")
+    features = {"perimeter_density": np.linspace(0.0, 1.0, 40),
+                "metal_density": np.full(40, 0.4)}
+    result = exposure.evaluate(channel, features, 40)
+    assert result.available
+    assert "does not vary" in result.reason
