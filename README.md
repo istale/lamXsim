@@ -33,10 +33,11 @@ To bring this up on a production layout, follow the
 [staged deployment guide](docs/deployment_stages.md). It is five stages, each
 ending in a gate, and it exists because the two things most likely to waste a
 day are a manifest that means something other than you thought and a run that
-cannot fit in memory. On the Python path extraction costs roughly 80 us and
-2 kB per merged polygon per scale, so **memory is the binding constraint on a
-full chip, not time** -- `lamxsim budget` measures both on a clip of your own
-layout and projects, because those constants are not transferable.
+cannot fit in memory. On the Python path memory is linear in merged polygon
+count at roughly 2.5 kB each, while **time is not linear** -- the windowed
+extractors cost rows x polygons, and both grow with die area -- so which of
+the two binds depends on the machine. `lamxsim budget` measures both on clips
+of your own layout and fits the growth, because neither constant transfers.
 
 ## Why this shape
 
@@ -141,19 +142,23 @@ and this code does not extract yet -- a much cheaper gap to close.
 ### How long will it take, and will it fit
 
 ```bash
-PYTHONPATH=src python3 -m lamxsim budget clip.gds --manifest layers.yaml \
-  --full-chip-polygons 100000000 --available-ram-gb 256
+PYTHONPATH=src python3 -m lamxsim budget small.gds large.gds \
+  --manifest layers.yaml --full-chip-polygons 100000000 \
+  --available-ram-gb 3000 --max-hours 24
 ```
 
-Runs the atlas once on a clip, reports the measured microseconds and kilobytes
-per merged polygon, and projects to the polygon count you give it. The
-projection is linear in two constants, and they are properties of your layout
-and your machine rather than of this code -- measure them on a clip that
-resembles the real thing, not on a quiet corner of it.
+Runs the atlas on each clip, reports the measured microseconds and kilobytes
+per merged polygon, fits how time grows with polygon count, and projects.
 
-If the projection does not fit, the answer is the deck below rather than a
-faster machine: the Python path holds every analysed layer merged in memory at
-once and has no tiling.
+Give it **two clips of different size**. With one it cannot fit the growth,
+assumes linear, and says so -- and linear is wrong by more than an order of
+magnitude over a full chip, because the windowed extractors clip the layer
+once per grid row and again per window. Measured across a 64x range the cost
+rose 4.8x, then 5.3x, then 5.9x for each 4x rise in polygons.
+
+If either projection does not fit, the answer is the deck below rather than a
+bigger machine. Memory has no tiling to fall back on, and the time growth is
+in the algorithm rather than the hardware.
 
 ### Full-chip: extract with Calibre instead of KLayout
 

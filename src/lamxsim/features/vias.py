@@ -22,7 +22,7 @@ import numpy as np
 
 from ..evidence import EvidenceClass
 from ..layout.reader import LayerSpec, LayoutReader
-from .grid import Grid
+from .grid import Grid, point_accumulate
 
 FEATURES = ("via_density", "via_count_density", "mean_via_area")
 EVIDENCE_CLASS = EvidenceClass.GDS_GEOMETRY
@@ -68,6 +68,16 @@ class ViaExtractor:
         u = self.u
         px, py = pts[:, 0], pts[:, 1]
 
+        # Counts and mean area by index arithmetic, once, rather than by
+        # masking the whole via array inside the per-window loop: that is
+        # O(vias x windows), and on a layout both grow with die area.
+        cell_area = np.array([c.area_um2 for c in grid.cells], dtype=float)
+        counts = point_accumulate(grid, px, py)
+        summed = point_accumulate(grid, px, py, areas)
+        out["via_count_density"] = counts / cell_area
+        out["mean_via_area"] = np.where(counts > 0,
+                                        summed / np.maximum(counts, 1.0), 0.0)
+
         rows: dict[int, list] = {}
         for c in grid.cells:
             rows.setdefault(c.row, []).append(c)
@@ -86,13 +96,7 @@ class ViaExtractor:
                 win = db.Region(db.Box(u.um_to_dbu(c.x0), u.um_to_dbu(c.y0),
                                        u.um_to_dbu(c.x1), u.um_to_dbu(c.y1)))
                 area = u.area_dbu2_to_um2((strip & win).area())
-                inside = ((px >= c.x0) & (px < c.x1)
-                          & (py >= c.y0) & (py < c.y1))
-                count = int(inside.sum())
-                i = c.cell_id
-                out["via_density"][i] = area / c.area_um2
-                out["via_count_density"][i] = count / c.area_um2
-                out["mean_via_area"][i] = (areas[inside].mean() if count else 0.0)
+                out["via_density"][c.cell_id] = area / c.area_um2
         return out
 
     def extract_roi(self, spec: LayerSpec, x0, y0, x1, y1) -> dict[str, float]:

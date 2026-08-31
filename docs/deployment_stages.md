@@ -14,32 +14,51 @@ statements about what the layout's layers mean.
 
 ## What the runtime actually depends on
 
-Measured on this repository's synthetic dies, one machine, Manhattan geometry,
-two metal layers with every extractor and the derived gradient and cross-layer
-terms:
+Two things scale differently, and mixing them up gives the wrong answer twice.
 
-| polygons | wall time, 1 scale | µs / polygon | peak RSS |
-|---:|---:|---:|---:|
-| 58,100 | 4.55 s | 78.4 | 398 MB |
-| 166,000 | 13.18 s | 79.4 | 652 MB |
-| 415,000 | 32.60 s | 78.6 | 1,128 MB |
+**Memory is linear in merged polygon count.** Measured on synthetic dies,
+about **2.5 kB per merged polygon**, holding across a sixty-fourfold range.
+The Python path holds every analysed layer merged at once and has no tiling,
+so this is the whole of it: a hundred million polygons is roughly 250 GB.
 
-Both constants are flat across a sevenfold range: **≈ 80 µs and ≈ 2 kB per
-merged polygon per scale**. Reading and merging the GDS is about 2 µs per
-polygon, a rounding error against extraction.
+**Time is not linear.** The windowed extractors clip the layer once per grid
+row, then once per window against that row, so the work is rows × polygons —
+and on a layout both grow with die area.
 
-Two things follow.
+| die | windows | polygons | one layer, one scale | growth | peak RSS |
+|---:|---:|---:|---:|---:|---:|
+| 400 µm | 9 | 16,000 | 0.55 s | — | 0.05 GB |
+| 800 µm | 49 | 64,000 | 2.67 s | 4.84× | 0.24 GB |
+| 1600 µm | 225 | 256,000 | 14.03 s | 5.26× | 0.82 GB |
+| 3200 µm | 961 | 1,024,000 | 82.30 s | 5.86× | 2.74 GB |
 
-**Memory is the binding constraint, not time.** At 2 kB per polygon a hundred
-million polygons is 200 GB. The Python path holds every analysed layer merged
-in memory at once and there is no tiling in it, so a full chip does not run
-slowly — it does not start. Time for the same layout is a few hours per scale,
-which is an ordinary overnight job.
+Each row is four times the polygons of the one above it. If time were linear
+the growth column would read 4.00×. It reads 4.84, 5.26, 5.86 — a local
+exponent climbing from 1.14 to 1.28, heading towards the 1.5 the rows ×
+polygons structure implies. **Projecting linearly from a small clip
+understates a full chip by more than an order of magnitude**, which is the
+difference between an overnight job and a fortnight.
+
+So the constraint depends on the machine, and the two cases give opposite
+advice:
+
+- **Ordinary hardware, tens of GB.** Memory binds first. A full chip does not
+  run slowly; it does not start.
+- **A large-memory machine, hundreds of GB to terabytes.** Memory stops
+  binding — 3 TB is about a billion polygons — and time becomes the wall
+  instead. It is not a wall a bigger machine moves: the growth is in the
+  algorithm. Fewer scales and fewer analysed layers reduce it proportionally,
+  which is the only lever the Python path offers.
+
+In both cases the answer for a full chip is the Calibre deck, for different
+reasons: there the moving window is a native primitive, and Python reads one
+value per window instead of scanning the layer once per window.
 
 **These constants are not your constants.** They come from Manhattan geometry
 with no hierarchy on one machine. Polygon density, hierarchy depth, the
-fraction of non-Manhattan geometry and the machine all move them, and the
-projection is linear in them. Stage 2 exists to measure yours.
+fraction of non-Manhattan geometry and the machine all move them. Stage 2
+measures yours, and needs at least two clips of different size to fit the
+exponent rather than assume it.
 
 ## Stage 0 — the contract, minutes
 
@@ -100,26 +119,45 @@ Run on a full die, or on a clip that resembles the real thing rather than a
 quiet corner of it:
 
 ```bash
-lamxsim budget die.gds --manifest layers.yaml \
-  --full-chip-polygons 100000000 --available-ram-gb 256
+lamxsim budget small_clip.gds large_clip.gds --manifest layers.yaml \
+  --full-chip-polygons 100000000 --available-ram-gb 3000 --max-hours 24
 ```
 
-It reports the merged polygon count per layer, the measured µs and kB per
-polygon, and the projection. Count the full chip's polygons the same way it
-does — merged, over the layers the manifest analyses.
+**Give it at least two clips of different size.** With one it cannot fit how
+time grows with polygon count, has to assume linear, and says so — but the
+assumption is wrong in the direction that matters and gets worse the further
+the projection reaches. Make them clips that resemble the real layout rather
+than quiet corners of it, and prefer the largest pair you can afford to run:
+the exponent itself drifts upward with size, so a fit from two small clips is
+still optimistic. The command says how far beyond its measured range it is
+extrapolating, and warns when that is more than tenfold the fitted span.
 
-**Gate.** The projected peak is under half the RAM you actually have. Half,
-because a peak is a peak and because nothing else on the machine gets to
-disappear while you run.
+Count the full chip's polygons the same way it does — merged, over the layers
+the manifest analyses.
+
+**Gate.** Two of them. The projected peak is under half the RAM you actually
+have — half, because a peak is a peak and nothing else on the machine gets to
+disappear while you run. And the projected time is inside a budget you are
+willing to spend, remembering that it is a lower bound.
 
 ## Stage 3 — the fork
 
-Projection fits: run the Python path on the full chip. Budget the projected
-hours and give the machine to the job.
+Both projections fit: run the Python path on the full chip. Give the machine
+to the job, and re-check the wall time against the projection as it runs — if
+it is running long, the exponent was fitted too low and stopping early costs
+less than finishing.
 
-Projection does not fit — which is what a hundred million polygons on ordinary
-hardware means: go to Stage 4. There is no third option in this repository
-today; the Python path has no tiling, and adding it is real work rather than a
+Either projection does not fit: go to Stage 4.
+
+- If **memory** is what fails, no amount of patience helps: the path holds
+  every analysed layer merged at once.
+- If **time** is what fails, a bigger machine does not help either — the
+  growth is in the algorithm, not in the hardware. The only levers the Python
+  path offers are fewer scales and fewer analysed layers, and both narrow the
+  study.
+
+There is no third option in this repository today. Tiling the Python path
+would flatten the growth back towards linear and is real work rather than a
 flag.
 
 ## Stage 4 — validate the Calibre deck once, hours

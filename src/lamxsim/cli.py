@@ -220,59 +220,86 @@ def cmd_characterize(args) -> int:
 
 
 def cmd_budget(args) -> int:
-    """Measure extraction cost on a clip and project it to the full chip."""
+    """Measure extraction cost on one or more clips and project it."""
     from . import budget as budget_mod
 
     manifest = StudyManifest.load(args.manifest)
-    polygons, per_layer = budget_mod.count_polygons(args.gds, manifest)
-    print(f"clip     : {args.gds}")
-    for name, count in sorted(per_layer.items(), key=lambda kv: -kv[1]):
-        print(f"  {name:8s} {count:12,d} merged polygon(s)")
-    print(f"  {'total':8s} {polygons:12,d}")
-    if polygons == 0:
-        print("\nNo geometry on any layer the manifest analyses. Check the "
-              "layer numbers before measuring anything.")
-        return 1
+    measurements = []
+    for path in args.gds:
+        polygons, per_layer = budget_mod.count_polygons(path, manifest)
+        print(f"clip     : {path}")
+        for name, count in sorted(per_layer.items(), key=lambda kv: -kv[1]):
+            print(f"  {name:8s} {count:12,d} merged polygon(s)")
+        print(f"  {'total':8s} {polygons:12,d}")
+        if polygons == 0:
+            print("\nNo geometry on any layer the manifest analyses. Check "
+                  "the layer numbers before measuring anything.")
+            return 1
+        m = budget_mod.measure(path, manifest)
+        measurements.append(m)
+        print(f"  measured {m.seconds:.1f}s over {m.scales} scale(s), "
+              f"{m.cells:,d} window(s), peak RSS "
+              f"{m.peak_rss_bytes / 1e9:.2f} GB")
+        print(f"           {m.seconds_per_polygon_scale * 1e6:.1f} us and "
+              f"{m.bytes_per_polygon / 1e3:.2f} kB per polygon per scale\n")
 
-    m = budget_mod.measure(args.gds, manifest)
-    print(f"\nmeasured : {m.seconds:.1f}s over {m.scales} scale(s), "
-          f"{m.cells:,d} window(s), peak RSS "
-          f"{m.peak_rss_bytes / 1e9:.2f} GB")
-    print(f"  {m.seconds_per_polygon_scale * 1e6:.1f} us per polygon per scale")
-    print(f"  {m.bytes_per_polygon / 1e3:.2f} kB per polygon")
+    exponent, how = budget_mod.fit_exponent(measurements)
+    print(f"time grows as polygons^{exponent:.2f}  ({how})")
 
     if not args.full_chip_polygons:
         print("\nPass --full-chip-polygons to project. Count them the same "
-              "way this does -- merged, on the layers the manifest analyses -- "
-              "or run this command on the full layout's layers alone.")
+              "way this does -- merged, on the layers the manifest analyses.")
         return 0
 
-    p = m.project(args.full_chip_polygons, len(manifest.scales_um))
+    biggest = max(measurements, key=lambda m: m.polygons)
+    p = biggest.project(args.full_chip_polygons, len(manifest.scales_um),
+                        exponent)
+    reach = args.full_chip_polygons / biggest.polygons
     print(f"\nprojected for {p['polygons']:,d} polygon(s) at "
-          f"{p['scales']} scale(s):")
-    print(f"  time      {p['hours']:.1f} hour(s)")
+          f"{p['scales']} scale(s), reaching {reach:.0f}x beyond the largest "
+          "clip measured:")
+    print(f"  time      {p['hours']:.1f} hour(s)"
+          f"   ({p['hours'] / 24:.1f} day(s))")
     print(f"  peak RSS  {p['peak_rss_gb']:.0f} GB")
-    print("\nThe projection is linear in two constants measured on this clip "
-          "and this machine. Polygon density, hierarchy depth and the "
-          "fraction of non-Manhattan geometry all move them, so re-measure on "
-          "a clip that resembles the real thing rather than on a corner of it.")
 
-    if p["peak_rss_gb"] > args.available_ram_gb / 2:
-        print(f"\nThis will not fit. {p['peak_rss_gb']:.0f} GB projected "
-              f"against {args.available_ram_gb:g} GB available, and the "
-              "Python path holds every analysed layer merged in memory at "
-              "once -- there is no tiling in it. Memory is the binding "
-              "constraint on a full chip, not time.")
-        print("Generate the Calibre deck instead:")
-        print(f"  lamxsim deck {args.gds} --manifest {args.manifest} "
-              "--outdir deck")
-        print("and run `characterize --features-from deck` once the deck has "
-              "been run and diffed against the emulator.")
+    span = (max(m.polygons for m in measurements)
+            / min(m.polygons for m in measurements))
+    if reach > 10 * span:
+        print(f"\n  The exponent was fitted over {span:.0f}x and is being "
+              f"used over {reach:.0f}x. It is not a constant: measured on "
+              "synthetic dies the local exponent climbed from 1.14 to 1.28 as "
+              "the die grew, so a fit from small clips understates a full "
+              "chip, and the time above is optimistic. Add a larger clip "
+              "before trusting it against a tight budget.")
+
+    fits_ram = p["peak_rss_gb"] <= args.available_ram_gb / 2
+    fits_time = p["hours"] <= args.max_hours
+    if fits_ram and fits_time:
+        print(f"\nThis fits: {p['peak_rss_gb']:.0f} GB against "
+              f"{args.available_ram_gb:g} GB, {p['hours']:.1f}h against a "
+              f"{args.max_hours:g}h budget. Give the machine to the job.")
         return 0
 
-    print(f"\nThis fits: {p['peak_rss_gb']:.0f} GB projected against "
-          f"{args.available_ram_gb:g} GB available. Budget "
-          f"{p['hours']:.1f} hour(s) and keep the machine to itself.")
+    print("")
+    if not fits_ram:
+        print(f"Memory does not fit: {p['peak_rss_gb']:.0f} GB projected "
+              f"against {args.available_ram_gb:g} GB. The Python path holds "
+              "every analysed layer merged at once and has no tiling.")
+    if not fits_time:
+        print(f"Time does not fit: {p['hours']:.1f} hour(s) against a "
+              f"{args.max_hours:g} hour budget. Time grows faster than the "
+              "polygon count because the windowed extractors clip the layer "
+              "once per grid row and again per window, so the work is rows "
+              "times polygons and both grow with die area. Fewer scales and "
+              "fewer layers reduce it proportionally; a bigger machine does "
+              "not.")
+    print("\nGenerate the Calibre deck instead -- the moving window is native "
+          "there, and Python then reads one value per window rather than "
+          "scanning the layer:")
+    print(f"  lamxsim deck {args.gds[0]} --manifest {args.manifest} "
+          "--outdir deck")
+    print("Run it, diff it against --emulate, then "
+          "`characterize --features-from deck`.")
     return 0
 
 
@@ -726,13 +753,18 @@ def main(argv=None) -> int:
     bg = sub.add_parser(
         "budget",
         help="measure extraction cost on a clip and project it to a full chip")
-    bg.add_argument("gds", help="a clip that resembles the real layout, not a "
-                                "corner of it: the projection is linear in "
-                                "constants this measures on it")
+    bg.add_argument("gds", nargs="+",
+                    help="one or more clips that resemble the real layout "
+                         "rather than a quiet corner of it. Two clips of "
+                         "different size let the command fit how time grows "
+                         "with polygon count; with one it has to assume 1.0, "
+                         "which understates a full chip badly")
     bg.add_argument("--manifest", default="config/study_manifest.yaml")
     bg.add_argument("--full-chip-polygons", type=int, default=0,
                     help="merged polygon count over the analysed layers of the "
                          "full layout, to project to")
+    bg.add_argument("--max-hours", type=float, default=24.0,
+                    help="wall-clock budget for one full run (default 24)")
     bg.add_argument("--available-ram-gb", type=float, default=64.0,
                     help="RAM the run may use (default 64). The projection is "
                          "compared against half of it, because the peak is a "

@@ -16,7 +16,7 @@ import numpy as np
 from ..evidence import EvidenceClass
 from ..layout.reader import LayerSpec, LayoutReader
 from . import corners, lineends
-from .grid import Grid
+from .grid import Grid, point_accumulate
 
 
 @dataclass(frozen=True)
@@ -243,15 +243,11 @@ class GeometryExtractor:
         fixed-size markers instead, because there the moving window is the
         DENSITY primitive and only understands area.
         """
-        out = np.zeros(len(grid), dtype=float)
         if len(pts) == 0:
-            return out
-        px, py = pts[:, 0], pts[:, 1]
-        for cell in grid.cells:
-            inside = ((px >= cell.x0) & (px < cell.x1)
-                      & (py >= cell.y0) & (py < cell.y1))
-            out[cell.cell_id] = inside.sum() / cell.area_um2
-        return out
+            return np.zeros(len(grid), dtype=float)
+        counts = point_accumulate(grid, pts[:, 0], pts[:, 1])
+        area = np.array([c.area_um2 for c in grid.cells], dtype=float)
+        return counts / area
 
     def extract_roi(self, spec: LayerSpec, x0: float, y0: float,
                     x1: float, y1: float) -> dict[str, float]:

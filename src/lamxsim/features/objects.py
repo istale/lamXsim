@@ -591,26 +591,21 @@ def rasterise(objects: list[ShapeObject], grid, values: dict[str, np.ndarray],
             out[f"{prefix}_{name}"] = np.full(n, np.nan)
         return out
 
+    from .grid import point_accumulate
+
     ox = np.array([o.x_um for o in objects])
     oy = np.array([o.y_um for o in objects])
-    sums = {name: np.zeros(n) for name in values}
-    counts = {name: np.zeros(n) for name in values}
-    for cell in grid.cells:
-        inside = ((ox >= cell.x0) & (ox < cell.x1)
-                  & (oy >= cell.y0) & (oy < cell.y1))
-        k = int(inside.sum())
-        out[f"{prefix}_count"][cell.cell_id] = k
-        if not k:
-            continue
-        for name, series in values.items():
-            finite = inside & np.isfinite(series)
-            counts[name][cell.cell_id] = finite.sum()
-            sums[name][cell.cell_id] = series[finite].sum()
-    for name in values:
-        with np.errstate(invalid="ignore", divide="ignore"):
-            out[f"{prefix}_{name}"] = np.where(
-                counts[name] > 0, sums[name] / np.maximum(counts[name], 1),
-                np.nan)
+    out[f"{prefix}_count"] = point_accumulate(grid, ox, oy)
+    for name, series in values.items():
+        # Objects whose value is undefined are excluded from both the sum and
+        # its divisor, so a pad with no matched bump does not drag the mean of
+        # the pads that have one towards zero.
+        finite = np.isfinite(series)
+        counts = point_accumulate(grid, ox[finite], oy[finite])
+        sums = point_accumulate(grid, ox[finite], oy[finite], series[finite])
+        out[f"{prefix}_{name}"] = np.where(counts > 0,
+                                           sums / np.maximum(counts, 1.0),
+                                           np.nan)
     return out
 
 

@@ -57,13 +57,55 @@ class Measurement:
         used = max(self.peak_rss_bytes - self.baseline_rss_bytes, 0)
         return used / max(self.polygons, 1)
 
-    def project(self, polygons: int, scales: int) -> dict:
-        """Extrapolate to a layout of *polygons* at *scales* scales."""
-        seconds = self.seconds_per_polygon_scale * polygons * scales
+    def project(self, polygons: int, scales: int,
+                exponent: float = 1.0) -> dict:
+        """Extrapolate to a layout of *polygons* at *scales* scales.
+
+        ``exponent`` is how the *time* grows with polygon count. It is not 1.
+        The windowed extractors clip the layer once per grid row and then once
+        per window against that row, so the work is rows times polygons; on a
+        layout both grow with die area, and measured across a sixty-fourfold
+        range the cost rose 4.8x, then 5.3x, then 5.9x for each fourfold rise
+        in polygons -- a local exponent climbing from 1.14 to 1.28. Projecting
+        linearly from a small clip understates a full chip by more than an
+        order of magnitude, which is the difference between an overnight job
+        and a fortnight.
+
+        Memory stays linear: it is the merged layers held at once.
+        """
+        ratio = polygons / max(self.polygons, 1)
+        seconds = self.seconds * (ratio ** exponent) * (scales / max(self.scales, 1))
         peak = self.baseline_rss_bytes + self.bytes_per_polygon * polygons
-        return {"polygons": polygons, "scales": scales,
+        return {"polygons": polygons, "scales": scales, "exponent": exponent,
                 "seconds": seconds, "hours": seconds / 3600.0,
                 "peak_rss_gb": peak / 1e9}
+
+
+def fit_exponent(measurements: "list[Measurement]") -> "tuple[float, str]":
+    """How time grows with polygon count, from two or more clips.
+
+    A log-log slope through the measurements. With one clip there is nothing
+    to fit and the caller has to say so rather than assume 1: the assumption
+    is wrong in the direction that matters, and it is wrong by a factor that
+    grows with how far the projection reaches.
+    """
+    import numpy as np
+
+    usable = [m for m in measurements if m.polygons > 0 and m.seconds > 0]
+    if len(usable) < 2:
+        return 1.0, ("only one clip was measured, so the growth of time with "
+                     "polygon count could not be fitted and 1.0 was assumed. "
+                     "It is not 1.0 -- the windowed extractors cost rows times "
+                     "polygons, and both grow with die area -- so the time "
+                     "below is a lower bound, and one that gets weaker the "
+                     "further the projection reaches. Measure a second, larger "
+                     "clip to fit it")
+    x = np.log([m.polygons for m in usable])
+    y = np.log([m.seconds / max(m.scales, 1) for m in usable])
+    slope = float(np.polyfit(x, y, 1)[0])
+    spread = max(m.polygons for m in usable) / min(m.polygons for m in usable)
+    return slope, (f"fitted over {len(usable)} clips spanning {spread:.0f}x in "
+                   "polygon count")
 
 
 def count_polygons(gds_path: str, manifest) -> tuple[int, dict]:
