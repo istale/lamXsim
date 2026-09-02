@@ -10,13 +10,13 @@ import numpy as np
 import pytest
 from scipy import stats
 
-from lamxsim.features.geometry import GeometryExtractor
-from lamxsim.features.grid import build_grid
-from lamxsim.features.vias import ViaExtractor
-from lamxsim.labels.package_context import (PackageLayers, absent_context_note,
-                                            extract as ctx_extract)
-from lamxsim.layout import synth
-from lamxsim.layout.reader import LayerSpec, LayoutReader
+from collective.geometry import GeometryExtractor
+from collective.geometry import build_grid
+from collective.geometry import ViaExtractor
+from collective.labels import (PackageLayers, absent_context_note,
+                               package_context_extract as ctx_extract)
+from collective import layout as synth
+from collective.layout import LayerSpec, LayoutReader
 
 M8 = LayerSpec("M8", 8, 0)
 V7 = LayerSpec("V7", 17, 0)
@@ -195,8 +195,8 @@ def test_missing_package_layers_are_recorded_as_uncontrolled(packaged):
 
 def test_package_context_is_position_evidence_not_geometry():
     """It comes from GDS layers but belongs in the baseline it exists to control."""
-    from lamxsim.evidence import EvidenceClass
-    from lamxsim.labels import package_context
+    from collective.foundation import EvidenceClass
+    from collective import labels as package_context
     assert package_context.EVIDENCE_CLASS is EvidenceClass.PACKAGE_POSITION
 
 

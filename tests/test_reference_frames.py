@@ -7,14 +7,14 @@ produced an error -- only a plausible number measured from the wrong origin.
 import numpy as np
 import pytest
 
-from lamxsim import pipeline
-from lamxsim.features.geometry import GeometryExtractor
-from lamxsim.features.grid import build_grid
-from lamxsim.labels.package_context import PackageLayers, extract as ctx_extract
-from lamxsim.labels.simulate import failures_from_driver
-from lamxsim.layout.reader import BBox, LayerSpec, LayoutReader
-from lamxsim.layout.synth import packaged_die, validation_die
-from lamxsim.stats.permutation import block_permutation_test
+from collective import workflow as pipeline
+from collective.geometry import GeometryExtractor
+from collective.geometry import build_grid
+from collective.labels import PackageLayers, package_context_extract as ctx_extract
+from collective.labels import failures_from_driver
+from collective.layout import BBox, LayerSpec, LayoutReader
+from collective.layout import packaged_die, validation_die
+from collective.statistics import block_permutation_test
 
 M8 = LayerSpec("M8", 8, 0)
 MANIFEST_PATH = "config/study_manifest.yaml"
@@ -95,7 +95,7 @@ def test_a_die_outline_that_excludes_the_geometry_is_refused(die):
 
 def test_unknown_registration_accuracy_cannot_be_primary(die):
     """Not knowing how well a failure was placed is not knowing it was placed well."""
-    from lamxsim.report import partition
+    from collective.exposure import partition
 
     path, reader, fs = die
     fs.table["position_sigma_um"] = np.nan
@@ -223,7 +223,7 @@ def test_line_rules_are_applied_per_layer(tmp_path):
     every layer lets an M7 power strap of 1.8um qualify as a terminated
     routing line.
     """
-    from lamxsim.layout import synth
+    from collective import layout as synth
 
     sl = synth.SynthLayout()
     for i in range(6):
@@ -246,7 +246,7 @@ def test_line_rules_are_applied_per_layer(tmp_path):
 
 
 def test_manifest_exposes_rules_per_layer_not_one_maximum():
-    from lamxsim.study import StudyManifest
+    from collective.study import StudyManifest
 
     m = StudyManifest.load(MANIFEST_PATH)
     rules = m.line_rule_map()
@@ -260,7 +260,7 @@ def test_manifest_exposes_rules_per_layer_not_one_maximum():
 
 def test_a_failure_outside_the_footprint_stops_the_run(die):
     """It disproves the population definition rather than qualifying it."""
-    from lamxsim.labels.inspection import InspectionFootprint
+    from collective.labels import InspectionFootprint
 
     path, reader, fs = die
     half = InspectionFootprint.from_rectangles([(0, 0, 500, 1000)],
@@ -271,7 +271,7 @@ def test_a_failure_outside_the_footprint_stops_the_run(die):
 
 
 def test_continuing_past_the_contradiction_must_be_asserted(die):
-    from lamxsim.labels.inspection import InspectionFootprint
+    from collective.labels import InspectionFootprint
 
     path, reader, fs = die
     half = InspectionFootprint.from_rectangles([(0, 0, 500, 1000)],
@@ -284,7 +284,7 @@ def test_continuing_past_the_contradiction_must_be_asserted(die):
 
 
 def test_a_consistent_footprint_needs_no_override(die):
-    from lamxsim.labels.inspection import InspectionFootprint
+    from collective.labels import InspectionFootprint
 
     path, reader, fs = die
     whole = InspectionFootprint.from_rectangles([(0, 0, 1000, 1000)],

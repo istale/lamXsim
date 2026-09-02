@@ -10,14 +10,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from lamxsim import pipeline
-from lamxsim.features.geometry import GeometryExtractor
-from lamxsim.features.grid import build_grid
-from lamxsim.labels.failure import FailureSet, map_to_grid_per_die
-from lamxsim.labels.simulate import failures_from_driver
-from lamxsim.layout.reader import BBox, LayerSpec, LayoutReader
-from lamxsim.layout.synth import validation_die
-from lamxsim.stats.cv import grouped_folds
+from collective import workflow as pipeline
+from collective.geometry import GeometryExtractor
+from collective.geometry import build_grid
+from collective.labels import FailureSet, map_to_grid_per_die
+from collective.labels import failures_from_driver
+from collective.layout import BBox, LayerSpec, LayoutReader
+from collective.layout import validation_die
+from collective.statistics import grouped_folds
 
 M8 = LayerSpec("M8", 8, 0)
 
@@ -180,7 +180,7 @@ def test_pipeline_refuses_mixed_modes_and_records_the_override(die_path):
 
 
 def test_absent_failed_layer_is_recorded_as_an_unseparated_population(tmp_path):
-    from lamxsim.labels.failure import load_failures
+    from collective.labels import load_failures
     p = tmp_path / "f.csv"
     pd.DataFrame({"sample_id": ["S0"], "lot_id": "L1", "wafer_id": "W1",
                   "die_x": 0, "die_y": 0, "x_um": [10.0], "y_um": [10.0],
@@ -240,7 +240,7 @@ def test_the_run_records_the_layout_it_analysed(die_path):
 
 
 def test_manifest_records_an_undeclared_layout_revision(tmp_path):
-    from lamxsim.study import StudyManifest
+    from collective.study import StudyManifest
 
     p = tmp_path / "m.yaml"
     p.write_text(

@@ -10,13 +10,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from lamxsim import pipeline
-from lamxsim.features.geometry import GeometryExtractor
-from lamxsim.features.grid import build_grid
-from lamxsim.labels.simulate import failures_from_driver
-from lamxsim.layout.reader import LayerSpec, LayoutReader
-from lamxsim.layout.synth import validation_die
-from lamxsim.report import partition
+from collective import workflow as pipeline
+from collective.geometry import GeometryExtractor
+from collective.geometry import build_grid
+from collective.labels import failures_from_driver
+from collective.layout import LayerSpec, LayoutReader
+from collective.layout import validation_die
+from collective.exposure import partition
 
 M8 = LayerSpec("M8", 8, 0)
 RULES = {"M8": (0.5, 4.0)}
@@ -92,7 +92,7 @@ def test_a_feature_without_a_registry_entry_cannot_be_primary():
 
 
 def test_the_summary_names_both_q_values(tmp_path):
-    from lamxsim import report
+    from collective import exposure as report
 
     df = pd.DataFrame([dict(
         feature="perimeter_density", layer="M8", scale_um=100.0,
@@ -101,7 +101,7 @@ def test_the_summary_names_both_q_values(tmp_path):
         auc_ci_high=0.84, effect_size=0.56, fdr_q_value=0.001,
         spatial_q_value=0.01, n_case=100, n_control=100, effective_n=50.0,
         enrichment_top_10pct=2.0)])
-    report.write(df, tmp_path)
+    report.write_reports(df, tmp_path)
     text = (tmp_path / "reports" / "README.md").read_text()
     assert "spatial_q_value" in text and "Mann-Whitney" in text
     assert "not_spatially_corrected" in text
@@ -111,7 +111,7 @@ def test_the_summary_names_both_q_values(tmp_path):
 # ---- package and process conditions --------------------------------
 
 def test_undeclared_package_conditions_are_recorded_as_a_gap():
-    from lamxsim.study import StudyManifest
+    from collective.study import StudyManifest
 
     m = StudyManifest.load("config/study_manifest.yaml")
     assert m.sample_conditions.undeclared()
@@ -119,7 +119,7 @@ def test_undeclared_package_conditions_are_recorded_as_a_gap():
 
 
 def test_each_condition_is_fixed_stratified_covariate_or_unknown():
-    from lamxsim.study import PACKAGE_PROCESS_CONDITIONS, SampleConditions
+    from collective.study import PACKAGE_PROCESS_CONDITIONS, SampleConditions
 
     sc = SampleConditions(fixed={"emc_thickness_um": 400},
                           stratified=("thermal_cycle_condition",),
@@ -151,7 +151,7 @@ def test_numpy_two_removed_the_ndarray_ptp_method():
     import pathlib
 
     code = [line.split("#", 1)[0]
-            for line in pathlib.Path("src/lamxsim/layout/synth.py").read_text()
+            for line in pathlib.Path("collective/layout.py").read_text()
             .splitlines()]
     assert not [line for line in code if ".ptp()" in line]
     assert any("np.ptp(" in line for line in code)

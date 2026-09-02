@@ -3,13 +3,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from lamxsim import pipeline, registry
-from lamxsim.features.geometry import GeometryExtractor
-from lamxsim.features.grid import build_grid
-from lamxsim.labels.failure import FailureSet, stratify
-from lamxsim.labels.simulate import failures_from_driver
-from lamxsim.layout.reader import LayerSpec, LayoutReader
-from lamxsim.layout.synth import validation_die
+from collective import workflow as pipeline, foundation as registry
+from collective.geometry import GeometryExtractor
+from collective.geometry import build_grid
+from collective.labels import FailureSet, stratify
+from collective.labels import failures_from_driver
+from collective.layout import LayerSpec, LayoutReader
+from collective.layout import validation_die
 
 M8 = LayerSpec("M8", 8, 0)
 RULES = {"M8": (0.5, 4.0)}
@@ -176,7 +176,7 @@ def test_a_missing_stratum_value_is_refused_not_bucketed(tmp_path):
     Coverage before this: all values present, or the column absent entirely.
     Not the real case, which is a column that exists and is partly filled.
     """
-    from lamxsim.labels.failure import load_failures, stratify
+    from collective.labels import load_failures, stratify
 
     partly = load_failures(_failure_file(tmp_path / "partial.csv",
                                          ["M8/ULK", "M8/ULK", None]))

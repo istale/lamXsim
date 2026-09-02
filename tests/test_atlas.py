@@ -10,9 +10,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from lamxsim import atlas, exposure
-from lamxsim.layout.synth import packaged_die
-from lamxsim.study import StudyManifest
+from collective import exposure as atlas, exposure
+from collective.layout import packaged_die
+from collective.study import StudyManifest
 
 MANIFEST = """
 layout:
@@ -213,10 +213,10 @@ def test_every_conditioned_candidate_lies_inside_its_own_condition(tmp_path):
     ``evaluate`` were both correct, and the caller simply did not put them
     together.
     """
-    from lamxsim import atlas as atlas_mod
-    from lamxsim.features.grid import build_multiscale
-    from lamxsim.layout.reader import LayoutReader
-    from lamxsim.study import StudyManifest
+    from collective import exposure as atlas_mod
+    from collective.geometry import build_multiscale
+    from collective.layout import LayoutReader
+    from collective.study import StudyManifest
 
     golden = Path(__file__).parent / "golden"
     manifest = StudyManifest.load(golden / "golden_manifest.yaml")
@@ -266,8 +266,8 @@ def test_die_relative_channels_need_a_declared_die_outline(tmp_path):
     """
     import yaml
 
-    from lamxsim import atlas as atlas_mod
-    from lamxsim.study import StudyManifest
+    from collective import exposure as atlas_mod
+    from collective.study import StudyManifest
 
     golden = Path(__file__).parent / "golden"
     raw = yaml.safe_load((golden / "golden_manifest.yaml").read_text())
@@ -324,7 +324,7 @@ def _slotting_die(path, *, pitch=50.0, n=8, solid_cells=((0, 0), (7, 7), (0, 7))
     """
     import klayout.db as db
 
-    from lamxsim.layout import synth
+    from collective import layout as synth
 
     size = pitch * 0.8
     sl = synth.SynthLayout()
@@ -396,7 +396,7 @@ def test_slotting_lowers_the_score_it_is_supposed_to_lower(tmp_path):
     reads unslotted wide metal instead, and this asserts the direction on a
     die that is solid on one half and slotted on the other.
     """
-    from lamxsim.study import StudyManifest
+    from collective.study import StudyManifest
 
     solid = {(0, 0), (7, 7), (0, 7)}
     gds = _slotting_die(tmp_path / "slotting.gds", solid_cells=tuple(solid))
@@ -423,7 +423,7 @@ def test_the_corner_tile_lever_is_top_layer_and_corner_only(tmp_path):
     would be a claim about M7; reported die-wide it would be the
     wide_metal_slotting channel under a second citation from the same paper.
     """
-    from lamxsim.study import StudyManifest
+    from collective.study import StudyManifest
 
     # One solid corner plate, not three. The corner condition admits the 16
     # cells nearest a corner, so three of them share the top value and sit at
@@ -463,7 +463,7 @@ def test_the_coverage_ledger_does_not_contradict_the_channels():
     because both contain "corner", which is the kind of check that gets
     loosened until it passes.
     """
-    from lamxsim import atlas as atlas_mod
+    from collective import exposure as atlas_mod
 
     ledger = atlas_mod._unimplemented_observables()
     assert set(ledger.status) <= {"absent", "partial", "not_recoverable"}
@@ -494,7 +494,7 @@ def test_the_coverage_ledger_does_not_contradict_the_channels():
 
 def test_every_channel_input_is_traceable_to_the_registry():
     """A channel whose observable has no registry row is an unsourced claim."""
-    from lamxsim import registry
+    from collective import foundation as registry
 
     for channel in exposure.CHANNELS:
         for feature in channel.inputs:

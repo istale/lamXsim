@@ -8,16 +8,16 @@ import numpy as np
 import pytest
 from scipy import stats
 
-from lamxsim import pipeline
-from lamxsim.features.crosslayer import LayerStack, extract as xl_extract
-from lamxsim.features.geometry import GeometryExtractor
-from lamxsim.features.gradient import gradients, interior_mask
-from lamxsim.features.grid import build_grid
-from lamxsim.features.orientation import OrientationExtractor
-from lamxsim.labels import position
-from lamxsim.labels.simulate import failures_from_driver
-from lamxsim.layout import synth
-from lamxsim.layout.reader import BBox, LayerSpec, LayoutReader
+from collective import workflow as pipeline
+from collective.geometry import LayerStack, crosslayer_extract as xl_extract
+from collective.geometry import GeometryExtractor
+from collective.geometry import gradients, interior_mask
+from collective.geometry import build_grid
+from collective.geometry import OrientationExtractor
+from collective import labels as position
+from collective.labels import failures_from_driver
+from collective import layout as synth
+from collective.layout import BBox, LayerSpec, LayoutReader
 
 M8 = LayerSpec("M8", 8, 0)
 M7 = LayerSpec("M7", 7, 0)
@@ -44,7 +44,7 @@ def test_one_sided_boundary_gradients_fake_a_die_edge_effect():
     """
     grid = build_grid(BBox(0, 0, 2000, 2000), 100.0)
     noise = np.random.default_rng(0).normal(size=len(grid))
-    d_edge = position.extract(grid, grid.bbox)["distance_to_die_edge"]
+    d_edge = position.position_extract(grid, grid.bbox)["distance_to_die_edge"]
 
     kept = gradients(noise, grid, "N", drop_boundary=False)["N_grad_mag"]
     mask = interior_mask(grid)

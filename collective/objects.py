@@ -1,3 +1,21 @@
+"""Per-object shape for bumps, pads, PI openings and crackstops.
+
+Consolidated from ``features/objects.py``.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from dataclasses import field
+import klayout.db as db
+import math
+import numpy as np
+from .foundation import EvidenceClass
+from .layout import BBox, LayerSpec, LayoutReader
+
+
+# ----------------------------------------------------------------------
+# features/objects.py
+# ----------------------------------------------------------------------
 """Per-object shape descriptors for bumps, pads, PI openings and crackstops.
 
 Everything else in this package measures a window: how much metal, how much
@@ -24,17 +42,6 @@ derivable from it by any means. Where the literature names an angle, the
 manifest has to say whether it means the plan-view corner angle, which is
 here, or a sidewall angle, which is not obtainable and is refused.
 """
-from __future__ import annotations
-
-import math
-from dataclasses import dataclass, field
-
-import klayout.db as db
-import numpy as np
-
-from ..evidence import EvidenceClass
-from ..layout.reader import BBox, LayerSpec, LayoutReader
-
 EVIDENCE_CLASS = EvidenceClass.PACKAGE_POSITION
 
 #: Two second moments this close in relative terms leave the principal axis
@@ -591,7 +598,7 @@ def rasterise(objects: list[ShapeObject], grid, values: dict[str, np.ndarray],
             out[f"{prefix}_{name}"] = np.full(n, np.nan)
         return out
 
-    from .grid import point_accumulate
+    from .geometry import point_accumulate
 
     ox = np.array([o.x_um for o in objects])
     oy = np.array([o.y_um for o in objects])

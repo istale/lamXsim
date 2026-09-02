@@ -10,13 +10,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from lamxsim.features.grid import build_grid
-from lamxsim.labels.failure import FailureSet
-from lamxsim.layout.reader import BBox
-from lamxsim.stats.permutation import block_permutation_test
-from lamxsim.stats.power import (min_achievable_p, permutation_budget,
-                                 required_permutations)
-from lamxsim.study import SampleConditions
+from collective.geometry import build_grid
+from collective.labels import FailureSet
+from collective.layout import BBox
+from collective.statistics import block_permutation_test
+from collective.statistics import (min_achievable_p, permutation_budget,
+                                   required_permutations)
+from collective.study import SampleConditions
 
 
 def _failures(**cols):
@@ -73,7 +73,7 @@ def test_a_covariate_varying_within_a_die_is_reported():
 def test_declared_covariates_reach_the_baseline_model():
     """Recording a condition and leaving it out of the model lets a geometry
     feature absorb its effect, which is what the declaration prevents."""
-    from lamxsim.stats.ablation import POSITION_FAMILY, select_columns
+    from collective.statistics import POSITION_FAMILY, select_columns
 
     columns = ["metal_density|M8", "condition_emc_thickness_um|-",
                "distance_to_die_edge|-"]
@@ -84,7 +84,7 @@ def test_declared_covariates_reach_the_baseline_model():
 
 def test_sample_conditions_are_their_own_evidence_class():
     """Not a position, not geometry, and not something GDS contains."""
-    from lamxsim.evidence import EvidenceClass, POSITION_MODEL_CLASSES
+    from collective.foundation import EvidenceClass, POSITION_MODEL_CLASSES
 
     assert EvidenceClass.SAMPLE_CONDITION in POSITION_MODEL_CLASSES
     assert EvidenceClass.SAMPLE_CONDITION is not EvidenceClass.GDS_GEOMETRY
@@ -163,7 +163,7 @@ def _row(feature, **kw):
 
 def test_the_hypothesis_set_is_not_the_findings():
     """primary contains rows at q = 1 by construction, and is read as results."""
-    from lamxsim import report
+    from collective import exposure as report
 
     df = pd.DataFrame([
         _row("perimeter_density"),
@@ -179,7 +179,7 @@ def test_the_hypothesis_set_is_not_the_findings():
 
 
 def test_the_console_shows_findings_and_says_so_when_there_are_none():
-    from lamxsim import report
+    from collective import exposure as report
 
     df = pd.DataFrame([_row("metal_density", spatial_q_value=1.0,
                             auc_ci_low=0.45, auc_ci_high=0.57)])
@@ -189,9 +189,9 @@ def test_the_console_shows_findings_and_says_so_when_there_are_none():
 
 
 def test_the_summary_distinguishes_the_two(tmp_path):
-    from lamxsim import report
+    from collective import exposure as report
 
-    report.write(pd.DataFrame([_row("perimeter_density")]), tmp_path)
+    report.write_reports(pd.DataFrame([_row("perimeter_density")]), tmp_path)
     text = (tmp_path / "reports" / "README.md").read_text()
     assert "**the findings**" in text
     assert "not a list of findings" in text
@@ -206,11 +206,11 @@ def test_a_p_pinned_at_the_floor_is_flagged_as_a_bound():
     imposed, not a value the data produced, and a reader has no way to tell
     from the number alone.
     """
-    from lamxsim import pipeline
-    from lamxsim.features.geometry import GeometryExtractor
-    from lamxsim.labels.simulate import failures_from_driver
-    from lamxsim.layout.reader import LayerSpec, LayoutReader
-    from lamxsim.layout.synth import validation_die
+    from collective import workflow as pipeline
+    from collective.geometry import GeometryExtractor
+    from collective.labels import failures_from_driver
+    from collective.layout import LayerSpec, LayoutReader
+    from collective.layout import validation_die
     import tempfile
     import os
 

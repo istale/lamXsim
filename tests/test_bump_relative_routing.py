@@ -8,14 +8,14 @@ diagonally, are identical in every other feature the engine has.
 import numpy as np
 import pytest
 
-from lamxsim import pipeline
-from lamxsim.features.bump_relative import extract as rel_extract
-from lamxsim.features.grid import build_grid
-from lamxsim.features.orientation import OrientationExtractor
-from lamxsim.labels.package_context import PackageLayers, extract as ctx_extract
-from lamxsim.labels.simulate import failures_from_driver
-from lamxsim.layout import synth
-from lamxsim.layout.reader import LayerSpec, LayoutReader
+from collective import workflow as pipeline
+from collective.geometry import bump_relative_extract as rel_extract
+from collective.geometry import build_grid
+from collective.geometry import OrientationExtractor
+from collective.labels import PackageLayers, package_context_extract as ctx_extract
+from collective.labels import failures_from_driver
+from collective import layout as synth
+from collective.layout import LayerSpec, LayoutReader
 
 M8 = LayerSpec("M8", 8, 0)
 PKG = PackageLayers(bump=LayerSpec("B", 60, 0),
@@ -97,7 +97,7 @@ def routing_die(tmp_path_factory):
 
 
 def test_the_die_varies_only_in_routing_direction(routing_die):
-    from lamxsim.features.geometry import GeometryExtractor
+    from collective.geometry import GeometryExtractor
 
     path, grid, rel = routing_die
     geo = GeometryExtractor(LayoutReader(path),
@@ -133,8 +133,8 @@ def test_bump_relative_routing_is_geometry_not_position(routing_die):
     Classifying it as package position would put the designer's lever into
     the baseline that the lever is supposed to beat.
     """
-    from lamxsim.evidence import EvidenceClass
-    from lamxsim.features import bump_relative
+    from collective.foundation import EvidenceClass
+    from collective import geometry as bump_relative
 
     assert bump_relative.EVIDENCE_CLASS is EvidenceClass.GDS_GEOMETRY
 

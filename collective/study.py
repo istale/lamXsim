@@ -1,3 +1,20 @@
+"""The study manifest: what the layout's layers mean.
+
+Consolidated from ``study.py``.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from dataclasses import field
+from pathlib import Path
+import yaml
+from .labels import FootprintSet, InspectionFootprint, PackageLayers
+from .layout import BBox, LayerSpec, LayoutReader
+
+
+# ----------------------------------------------------------------------
+# study.py
+# ----------------------------------------------------------------------
 """Study manifest: the human-supplied semantics that give GDS physical meaning.
 
 GDS layer numbers are identifiers. Which of them is top metal, which is a via,
@@ -10,18 +27,6 @@ Loading a manifest is therefore also a validation step: it fails on a layer
 that is not in the layout, and it records every semantic that was left
 unspecified as an explicit gap rather than a default.
 """
-from __future__ import annotations
-
-from dataclasses import dataclass, field
-from pathlib import Path
-
-import yaml
-
-from .labels.inspection import FootprintSet, InspectionFootprint
-from .labels.package_context import PackageLayers
-from .layout.reader import BBox, LayerSpec, LayoutReader
-
-
 def _spec(entry) -> LayerSpec | None:
     if not entry:
         return None
@@ -189,7 +194,8 @@ class ShapeSemantics:
         return self.polarity.get(kind, self.DEFAULT_POLARITY.get(kind, "positive"))
 
     def validate(self) -> None:
-        from .features.objects import AMBIGUOUS_MATCH_RULES, MATCH_RULES
+        from .objects import AMBIGUOUS_MATCH_RULES
+        from .objects import MATCH_RULES
 
         if self.object_matching in AMBIGUOUS_MATCH_RULES:
             raise ValueError(

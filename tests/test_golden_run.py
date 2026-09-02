@@ -17,8 +17,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from lamxsim import atlas
-from lamxsim.study import StudyManifest
+from collective import exposure as atlas
+from collective.study import StudyManifest
 
 GOLDEN = Path(__file__).parent / "golden"
 EXPECTED = GOLDEN / "expected"

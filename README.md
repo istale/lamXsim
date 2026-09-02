@@ -18,6 +18,12 @@ missing features -- see [Known gaps](#known-gaps) for what is, and
 [What GDS cannot answer](#what-gds-cannot-answer) for what no amount of work
 here will fix.
 
+> **This is the `collective` branch.** The code is the same as `main`, folded
+> from forty modules into ten files under `collective/`, with the test suite
+> as the check that the fold was faithful. `docs/collective_layout.md` maps
+> every file back to what it came from. Run things with `PYTHONPATH=.` and
+> `python3 -m collective` rather than `PYTHONPATH=src` and `-m lamxsim`.
+
 ## Engineering interpretation
 
 lamXsim is deliberately GDS-first. It uses literature to turn layout geometry
@@ -56,7 +62,7 @@ still useful question: **where does this layout depart from a lever the
 literature documents?**
 
 ```bash
-PYTHONPATH=src python3 -m lamxsim characterize chip.gds \
+PYTHONPATH=. python3 -m collective characterize chip.gds \
   --manifest layers.yaml --outdir results/atlas
 ```
 
@@ -142,7 +148,7 @@ and this code does not extract yet -- a much cheaper gap to close.
 ### How long will it take, and will it fit
 
 ```bash
-PYTHONPATH=src python3 -m lamxsim budget small.gds large.gds \
+PYTHONPATH=. python3 -m collective budget small.gds large.gds \
   --manifest layers.yaml --full-chip-polygons 100000000 \
   --available-ram-gb 3000 --max-hours 24
 ```
@@ -168,9 +174,9 @@ maps are what a DRC engine does natively. Generate the deck, run it, and point
 `characterize` at the output:
 
 ```bash
-PYTHONPATH=src python3 -m lamxsim deck chip.gds --manifest layers.yaml --outdir deck
+PYTHONPATH=. python3 -m collective deck chip.gds --manifest layers.yaml --outdir deck
 # run deck/rules.svrf in Calibre, then
-PYTHONPATH=src python3 -m lamxsim characterize chip.gds \
+PYTHONPATH=. python3 -m collective characterize chip.gds \
   --manifest layers.yaml --features-from deck
 ```
 
@@ -182,7 +188,7 @@ which maps came from where.
 
 On the regression die the two paths produce the **same candidate set**, and the
 cross-check that establishes that is `tests/test_calibre_crosscheck.py`. It runs
-against `lamxsim.calibre.emulate`, a KLayout statement of what each generated
+against `collective.calibre` (its `emulate` half), a KLayout statement of what each generated
 rule means — enough to test the ingest path, the conversions and the grid
 alignment, not enough to test Calibre. `--emulate` on the `deck` command
 produces that output without a licence, and anything derived from it is labelled
@@ -214,15 +220,15 @@ scales every count by a constant nothing downstream would notice.
 ## Quick start
 
 ```bash
-PYTHONPATH=src python3 -m lamxsim phase0
+PYTHONPATH=. python3 -m collective phase0
 ```
 
 ```bash
-PYTHONPATH=src python3 -m lamxsim thinslice --outdir results
+PYTHONPATH=. python3 -m collective thinslice --outdir results
 ```
 
 ```bash
-PYTHONPATH=src python3 -m pytest tests -q
+PYTHONPATH=. python3 -m pytest tests -q
 ```
 
 ## Phase 0: is the study feasible?
@@ -486,7 +492,7 @@ uncertainty decides which analysis scales mean anything, so `lamxsim register`
 fits it and reports the floor.
 
 ```bash
-PYTHONPATH=src python3 -m lamxsim register fiducials.csv
+PYTHONPATH=. python3 -m collective register fiducials.csv
 ```
 
 **The residual of a fit is not the accuracy of the mapping.** Each fiducial
@@ -530,7 +536,7 @@ mis-identified mark, that took the floor from 191 um to 19 um.
 ## Phase 6: does geometry add anything?
 
 ```bash
-PYTHONPATH=src python3 -m lamxsim phase6 --outdir results
+PYTHONPATH=. python3 -m collective phase6 --outdir results
 ```
 
 **Spatial separation first.** Blocking alone does not separate train from test:
@@ -673,7 +679,7 @@ rides the native scanner:
 METAL -> marker layer -> DENSITY WINDOW/STEP -> per-window value -> Python
 ```
 
-`lamxsim.calibre.svrf` generates the decks; `lamxsim.calibre.ingest` reads
+`collective.calibre` generates the decks and reads
 the results back onto the same grid the KLayout path uses, so the two are
 interchangeable downstream. Three findings from measuring the approximation
 against exact edge lengths are built in.
@@ -746,39 +752,35 @@ per layer, never pooled as magnitude.
 
 ## Layout
 
+Ten files, ordered by the dependency graph: `foundation` depends on nothing
+else here, `workflow` depends on most of it. `docs/collective_layout.md` maps
+every one back to the module it was folded from and lists the twelve names the
+merge had to rename.
+
 ```
-src/lamxsim/
-  evidence.py            evidence classes (spec section 30) + mixing guard
-  units.py               dbu <-> um, isolated at the layout boundary
-  pipeline.py            thin slice: layout -> features -> labels -> association
-  cli.py                 phase0 / thinslice / run
-  layout/reader.py       KLayout reader; cached merged Regions and Edges
-  layout/synth.py        section 25/26 pattern pairs + validation die
-  features/grid.py       multi-scale physical grids
-  features/geometry.py   metal_density (4A), perimeter_density (4C),
-                         line_end_density (4D)
-  features/orientation.py length-weighted orientation (4F)
-  features/gradient.py   dQ_dx, dQ_dy, |grad Q| (5), boundary-ring handling
-  features/crosslayer.py layer-pair and stack features (7, 8)
-  features/corners.py    convex/concave classification, corner markers
-  features/lineends.py   candidate line-end definitions and the scored choice
-  calibre/svrf.py        SVRF deck generation for the marker -> DENSITY route
-  calibre/ingest.py      Calibre RDB/CSV back onto the analysis grid
-  labels/failure.py      failure import, value validation, die and mode identity
-  labels/inspection.py   inspection footprint and control opportunity
-  labels/package_context.py bump, pad, PI-opening and crackstop context
-  study.py               study manifest: the semantics GDS does not contain
-  report.py              results partitioned by what each row may claim
-  labels/position.py     PACKAGE_POSITION features (section 9)
-  labels/simulate.py     simulated labels, for validation only
-  stats/univariate.py    effect size, AUC, PR-AUC, enrichment, effective N, CI
-  stats/fdr.py           tiered Benjamini-Hochberg
-  stats/permutation.py   Moran's I, autocorrelation range, block permutation
-  stats/power.py         Phase 0 feasibility
-  stats/cv.py            block, buffered-block and grouped folds + leakage report
-  stats/baseline.py      regularised logistic regression, calibration, ΔAUC
-  stats/ablation.py      nested feature families against the position baseline
-  registration/          transform fitting, honest error, scale gating
+collective/
+  foundation.py   dbu <-> um, evidence classes and the mixing guard, the
+                  feature registry every reported name is matched against
+  layout.py       KLayout reader with cached merged Regions and Edges;
+                  synthetic pattern pairs and validation dies
+  geometry.py     multi-scale grids and every window feature on them --
+                  density, perimeter, line ends, corners, orientation,
+                  wide metal and slotting, vias, gradients, cross-layer
+  objects.py      per-object shape for bumps, pads, PI openings and
+                  crackstops, their matching, and the crackstop structure
+  labels.py       position, bump/pad/PI/crackstop context, failure import
+                  and validation, inspection footprint, simulated labels
+  study.py        the manifest: layer identity, polarity, matching rule,
+                  shape targets -- the semantics a GDS does not contain
+  statistics.py   effect size and AUC, tiered Benjamini-Hochberg, Moran's I
+                  and block permutation, Phase 0 power, folds and leakage,
+                  the position baseline and the ablation ladder
+  calibre.py      SVRF deck generation, the KLayout emulator that states
+                  what each rule means, and reading RDB back onto the grid
+  exposure.py     literature channels, the atlas they build, and the
+                  reports partitioned by what each row may claim
+  workflow.py     registration and its scale gate, the correlation
+                  pipeline, the cost model, and the command line
 ```
 
 ## Deviations from the spec, and why

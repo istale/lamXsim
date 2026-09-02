@@ -25,10 +25,10 @@ dependencies = [
 dev = ["pytest>=7"]
 
 [project.scripts]
-lamxsim = "lamxsim.cli:main"
+lamxsim = "collective.workflow:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+include = ["collective*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

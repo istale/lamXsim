@@ -20,13 +20,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lamxsim.calibre import emulate, ingest
-from lamxsim.calibre.svrf import CalibreLayer
-from lamxsim.features.geometry import GeometryExtractor
-from lamxsim.features.grid import build_grid
-from lamxsim.features.vias import ViaExtractor
-from lamxsim.layout.reader import LayoutReader
-from lamxsim.study import StudyManifest
+from collective import calibre as emulate, calibre as ingest
+from collective.calibre import CalibreLayer
+from collective.geometry import GeometryExtractor
+from collective.geometry import build_grid
+from collective.geometry import ViaExtractor
+from collective.layout import LayoutReader
+from collective.study import StudyManifest
 
 GOLDEN = Path(__file__).parent / "golden"
 SCALE = 100.0
@@ -190,9 +190,9 @@ def test_the_deck_does_not_claim_to_produce_a_line_end_count(both_paths):
 
 def test_the_opening_measures_minimum_width_not_line_ends(tmp_path):
     """Pinning the numbers that make the renaming a fact rather than a view."""
-    from lamxsim.features import lineends
-    from lamxsim.layout import synth
-    from lamxsim.layout.reader import LayerSpec, LayoutReader
+    from collective import geometry as lineends
+    from collective import layout as synth
+    from collective.layout import LayerSpec, LayoutReader
 
     dbu = 0.001
     cases = {}
@@ -221,7 +221,7 @@ def test_the_atlas_is_the_same_whichever_path_extracted_it(tmp_path):
     within the die, so a sub-percent shift in one map can still move a cell
     across the 95th-percentile line -- which is the level a reader acts on.
     """
-    from lamxsim import atlas as atlas_mod
+    from collective import exposure as atlas_mod
 
     manifest = StudyManifest.load(str(GOLDEN / "golden_manifest.yaml"))
     gds = str(GOLDEN / "golden_die.gds")
@@ -243,7 +243,7 @@ def test_the_atlas_is_the_same_whichever_path_extracted_it(tmp_path):
 
 def test_a_deck_stepped_differently_from_the_grid_is_refused(tmp_path):
     """Silently re-binning would attribute values to the wrong cells."""
-    from lamxsim import atlas as atlas_mod
+    from collective import exposure as atlas_mod
 
     manifest = StudyManifest.load(str(GOLDEN / "golden_manifest.yaml"))
     gds = str(GOLDEN / "golden_die.gds")
@@ -268,7 +268,7 @@ def test_a_deck_missing_a_manifest_scale_is_refused(tmp_path):
     the manifest asks for two; the completeness gate would catch the same run
     on the missing files if the deck had claimed both.
     """
-    from lamxsim import atlas as atlas_mod
+    from collective import exposure as atlas_mod
 
     manifest = StudyManifest.load(str(GOLDEN / "golden_manifest.yaml"))
     gds = str(GOLDEN / "golden_die.gds")
@@ -287,7 +287,7 @@ def test_a_partial_deck_directory_is_refused(tmp_path):
     ``extraction: calibre`` and whose density, perimeter and via maps had all
     come from KLayout, with nothing in the output saying so.
     """
-    from lamxsim import atlas as atlas_mod
+    from collective import exposure as atlas_mod
 
     manifest = StudyManifest.load(str(GOLDEN / "golden_manifest.yaml"))
     gds = str(GOLDEN / "golden_die.gds")
@@ -310,7 +310,7 @@ def test_the_eps_guard_is_a_gate_and_not_a_note(tmp_path):
     checked by a human is not part of an evidence chain: the result is now a
     required file, and a non-empty one stops the run.
     """
-    from lamxsim import atlas as atlas_mod
+    from collective import exposure as atlas_mod
 
     manifest = StudyManifest.load(str(GOLDEN / "golden_manifest.yaml"))
     gds = str(GOLDEN / "golden_die.gds")
@@ -340,7 +340,7 @@ def test_the_guard_uses_the_projected_metric(tmp_path):
     """
     import klayout.db as db
 
-    from lamxsim.layout.reader import LayerSpec, LayoutReader
+    from collective.layout import LayerSpec, LayoutReader
 
     reader = LayoutReader(str(GOLDEN / "golden_die.gds"))
     region = reader.region(LayerSpec("M8", 8, 0))
@@ -361,7 +361,7 @@ def test_every_deck_output_path_is_a_real_path(tmp_path):
     run for a missing file. The whole suite passed, because nothing read the
     generated text.
     """
-    from lamxsim.calibre import svrf
+    from collective import calibre as svrf
 
     manifest = StudyManifest.load(str(GOLDEN / "golden_manifest.yaml"))
     results = str(tmp_path / "results")
@@ -388,7 +388,7 @@ def test_deck_output_from_another_layout_is_refused(tmp_path):
     """
     import klayout.db as db
 
-    from lamxsim import atlas as atlas_mod
+    from collective import exposure as atlas_mod
 
     manifest = StudyManifest.load(str(GOLDEN / "golden_manifest.yaml"))
     gds = str(GOLDEN / "golden_die.gds")
@@ -414,7 +414,7 @@ def test_deck_output_with_no_binding_at_all_is_refused(tmp_path):
     """Absence of a binding is not a pass."""
     import json
 
-    from lamxsim import atlas as atlas_mod
+    from collective import exposure as atlas_mod
 
     manifest = StudyManifest.load(str(GOLDEN / "golden_manifest.yaml"))
     gds = str(GOLDEN / "golden_die.gds")
@@ -444,7 +444,7 @@ def test_a_deck_built_against_different_layer_rules_is_refused(tmp_path):
     """
     import yaml
 
-    from lamxsim import atlas as atlas_mod
+    from collective import exposure as atlas_mod
 
     manifest_path = GOLDEN / "golden_manifest.yaml"
     manifest = StudyManifest.load(str(manifest_path))

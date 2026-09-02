@@ -7,10 +7,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from lamxsim.labels.failure import FailureSet
-from lamxsim.registration.apply import RegistrationError, register, scale_gate
-from lamxsim.registration.fit import fit, flag_outliers, robust_fit, select_model
-from lamxsim.registration.transform import Transform2D, fit_transform
+from collective.labels import FailureSet
+from collective.workflow import RegistrationError, register, scale_gate
+from collective.workflow import fit, flag_outliers, robust_fit, select_model
+from collective.workflow import Transform2D, fit_transform
 
 
 def _make(n, noise=0.0, rotation_deg=0.0, translation=(0.0, 0.0),

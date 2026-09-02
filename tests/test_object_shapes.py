@@ -16,9 +16,9 @@ import math
 import numpy as np
 import pytest
 
-from lamxsim.features import objects as obj
-from lamxsim.layout.reader import BBox, LayerSpec, LayoutReader
-from lamxsim.layout import synth
+from collective import objects as obj
+from collective.layout import BBox, LayerSpec, LayoutReader
+from collective import layout as synth
 
 DIE = BBox(0.0, 0.0, 200.0, 200.0)
 
@@ -282,7 +282,7 @@ def _write_layout(layout, path):
 
 def test_rasterising_leaves_empty_cells_undefined(tmp_path):
     """Zero is a value; "there is no pad here" is not that value."""
-    from lamxsim.features.grid import build_grid
+    from collective.geometry import build_grid
 
     reader = _write(tmp_path, "sparse.gds", {81: [_square(25, 25, 5)]})
     pads = obj.objects_for(reader, LayerSpec("PAD", 81, 0), kind="pad",
@@ -330,8 +330,8 @@ def test_the_shape_channels_flag_the_site_whose_shape_differs(tmp_path):
     Half-and-half would put half the cells at the top value, which is the top
     50 % and not the top 5 %, so the fixture leaves one genuine extreme.
     """
-    from lamxsim import atlas
-    from lamxsim.study import StudyManifest
+    from collective import exposure as atlas
+    from collective.study import StudyManifest
 
     gds = synth.shape_variation_die(str(tmp_path / "shapes.gds"),
                                     odd_sites=((0, 0),))
@@ -357,8 +357,8 @@ def test_the_shape_channels_flag_the_site_whose_shape_differs(tmp_path):
 
 def test_without_a_declared_target_the_pad_channel_says_what_is_missing(tmp_path):
     """Nothing in a layout says which pad shape a process recommends."""
-    from lamxsim import atlas
-    from lamxsim.study import StudyManifest
+    from collective import exposure as atlas
+    from collective.study import StudyManifest
 
     gds = synth.shape_variation_die(str(tmp_path / "shapes.gds"))
     manifest = StudyManifest.load(
@@ -376,7 +376,7 @@ def test_a_sidewall_angle_is_refused_rather_than_reinterpreted(tmp_path):
     """A GDS holds no Z information, so no vertical angle is derivable."""
     import yaml
 
-    from lamxsim.study import StudyManifest
+    from collective.study import StudyManifest
 
     path = tmp_path / "sidewall.yaml"
     raw = yaml.safe_load(open(_shape_manifest(tmp_path / "base.yaml")))
@@ -390,7 +390,7 @@ def test_a_sidewall_angle_is_refused_rather_than_reinterpreted(tmp_path):
 def test_an_undeclarable_matching_rule_is_refused(tmp_path):
     import yaml
 
-    from lamxsim.study import StudyManifest
+    from collective.study import StudyManifest
 
     path = tmp_path / "rule.yaml"
     raw = yaml.safe_load(open(_shape_manifest(tmp_path / "base.yaml")))
@@ -641,9 +641,9 @@ def test_the_crackstop_channel_locates_a_pinch(tmp_path):
     """
     import klayout.db as db
 
-    from lamxsim import atlas
-    from lamxsim.features.grid import build_grid
-    from lamxsim.study import StudyManifest
+    from collective import exposure as atlas
+    from collective.geometry import build_grid
+    from collective.study import StudyManifest
 
     u = 1000
     ring = _ring(400, 8)
@@ -707,7 +707,7 @@ def test_a_channel_can_give_each_input_its_own_direction():
     directions today -- the mechanism is here so that the next one cannot
     inherit the same flaw silently.
     """
-    from lamxsim import exposure
+    from collective import exposure
 
     channel = exposure.Channel(
         channel_id="mixed", mechanism="test", references=("-",),
@@ -737,8 +737,8 @@ def test_the_crackstop_channel_produces_a_candidate_end_to_end(tmp_path):
     sharing a value cannot reach the 95th percentile. A test on the
     descriptors could not see that; only the file can.
     """
-    from lamxsim import atlas
-    from lamxsim.study import StudyManifest
+    from collective import exposure as atlas
+    from collective.study import StudyManifest
 
     gds = synth.shape_variation_die(str(tmp_path / "pinched.gds"),
                                     crackstop_pinch_um=3.0)
@@ -799,7 +799,7 @@ def test_the_width_map_stays_on_a_forty_five_degree_ring(tmp_path):
     """
     import klayout.db as db
 
-    from lamxsim.features.grid import build_grid
+    from collective.geometry import build_grid
 
     path = _ring_gds(tmp_path / "diamond.gds", [_diamond(400.0, 12.0)])
     reader = LayoutReader(path)
@@ -839,7 +839,7 @@ def test_a_break_in_the_ring_is_located(tmp_path):
     """
     import klayout.db as db
 
-    from lamxsim.features.grid import build_grid
+    from collective.geometry import build_grid
 
     u = 1000
     ring = (db.Region(db.Box(100 * u, 100 * u, 900 * u, 900 * u))
@@ -871,7 +871,7 @@ def test_a_break_in_the_ring_is_located(tmp_path):
 
 def test_the_crackstop_channel_reads_two_inputs_in_opposite_directions(tmp_path):
     """A narrow rail is low, a long break is high, and both are departures."""
-    from lamxsim import exposure
+    from collective import exposure
 
     channel = next(c for c in exposure.CHANNELS
                    if c.channel_id == "crackstop_structure")

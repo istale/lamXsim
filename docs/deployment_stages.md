@@ -167,7 +167,7 @@ tool it targets.
 
 The deck's *text* is tested: every `DFM RDB` line contains a real path and no
 unexpanded variable. Its *semantics* are checked against
-`lamxsim.calibre.emulate`, which states in KLayout region algebra what each
+`collective.calibre`'s emulator, which states in KLayout region algebra what each
 rule means. That catches an error in the ingest path, the conversions or the
 grid alignment. It cannot catch a difference between this repository's reading
 of SVRF and Mentor's implementation of it — if `SIZE ... BY -eps` does

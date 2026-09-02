@@ -8,11 +8,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from lamxsim import pipeline
-from lamxsim.calibre.ingest import area_conversion, to_grid
-from lamxsim.features.grid import build_grid
-from lamxsim.labels.failure import FailureSet, load_failures, map_to_grid
-from lamxsim.layout.reader import BBox
+from collective import workflow as pipeline
+from collective.calibre import area_conversion, to_grid
+from collective.geometry import build_grid
+from collective.labels import FailureSet, load_failures, map_to_grid
+from collective.layout import BBox
 
 GRID_BBOX = BBox(0, 0, 1000, 1000)
 
@@ -186,7 +186,7 @@ def test_nothing_matching_at_all_is_an_error():
 
 
 def test_perimeter_conversion_divides_by_eps():
-    from lamxsim.calibre.ingest import perimeter_conversion
+    from collective.calibre import perimeter_conversion
     grid = build_grid(GRID_BBOX, 100.0)
     centre = grid.cells[0]
     df = pd.DataFrame({"x_um": [centre.x_center], "y_um": [centre.y_center],
@@ -208,8 +208,8 @@ def test_writing_an_empty_association_frame_does_not_raise(tmp_path):
 
 def test_pipeline_refuses_when_no_failure_lands_on_the_die(tmp_path):
     """The usual cause is coordinates that were never registered."""
-    from lamxsim.layout.synth import validation_die
-    from lamxsim.layout.reader import LayerSpec
+    from collective.layout import validation_die
+    from collective.layout import LayerSpec
 
     path = str(tmp_path / "die.gds")
     validation_die(path, die_um=500.0, block_um=50.0, seed=1)

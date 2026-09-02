@@ -295,6 +295,6 @@ Any feature added to the repo should document:
 
 This traceability is the mechanism by which the repo can approach maximum
 coverage of the information available in GDS without overstating what GDS can
-prove. It is enforced: `lamxsim.registry` matches every reported feature
+prove. It is enforced: `collective.foundation`'s registry matches every reported feature
 against `references/feature_evidence_map.csv`, and the run metadata names any
 that have no entry or whose entry is incomplete.

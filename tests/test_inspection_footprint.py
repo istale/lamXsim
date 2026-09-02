@@ -11,14 +11,14 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from lamxsim import pipeline
-from lamxsim.features.geometry import GeometryExtractor
-from lamxsim.features.grid import build_grid
-from lamxsim.labels.inspection import (InspectionFootprint, audit_failures,
-                                       coverage, eligibility)
-from lamxsim.labels.simulate import failures_from_driver
-from lamxsim.layout.reader import BBox, LayerSpec, LayoutReader
-from lamxsim.layout.synth import validation_die
+from collective import workflow as pipeline
+from collective.geometry import GeometryExtractor
+from collective.geometry import build_grid
+from collective.labels import (InspectionFootprint, audit_failures,
+                               coverage, eligibility)
+from collective.labels import failures_from_driver
+from collective.layout import BBox, LayerSpec, LayoutReader
+from collective.layout import validation_die
 
 M8 = LayerSpec("M8", 8, 0)
 DIE = 2000.0
@@ -67,7 +67,7 @@ def test_partly_covered_cells_are_excluded_by_the_threshold():
 
 def test_a_failure_outside_the_footprint_is_a_contradiction(tmp_path):
     """Something found where nothing was looked at means an input is wrong."""
-    from lamxsim.labels.failure import FailureSet
+    from collective.labels import FailureSet
     import pandas as pd
 
     fp = InspectionFootprint.from_rectangles([(0, 0, 100, 100)])
@@ -171,10 +171,10 @@ def test_a_footprint_per_die_changes_who_is_a_control(tmp_path):
     """
     import pandas as pd
     from dataclasses import replace
-    from lamxsim.labels.failure import FailureSet
-    from lamxsim.labels.inspection import FootprintSet
-    from lamxsim.features.geometry import GeometryExtractor
-    from lamxsim.layout.synth import validation_die
+    from collective.labels import FailureSet
+    from collective.labels import FootprintSet
+    from collective.geometry import GeometryExtractor
+    from collective.layout import validation_die
 
     path = str(tmp_path / "die.gds")
     validation_die(path, die_um=1000.0, block_um=50.0, seed=7)
@@ -219,9 +219,9 @@ def test_a_footprint_per_die_changes_who_is_a_control(tmp_path):
 def test_a_die_with_no_footprint_is_refused(tmp_path):
     """No declared footprint means no control population for that die."""
     import pandas as pd
-    from lamxsim.labels.failure import FailureSet
-    from lamxsim.labels.inspection import FootprintSet
-    from lamxsim.layout.synth import validation_die
+    from collective.labels import FailureSet
+    from collective.labels import FootprintSet
+    from collective.layout import validation_die
 
     path = str(tmp_path / "die.gds")
     validation_die(path, die_um=500.0, block_um=50.0, seed=1)
@@ -257,8 +257,8 @@ def test_a_failure_just_outside_is_measurement_error_not_a_contradiction():
     error is no longer an explanation.
     """
     import pandas as pd
-    from lamxsim.labels.failure import FailureSet
-    from lamxsim.labels.inspection import TOLERANCE_SIGMAS
+    from collective.labels import FailureSet
+    from collective.labels import TOLERANCE_SIGMAS
 
     fp = InspectionFootprint.from_rectangles([(0, 0, 1000, 1000)])
     sigma = 10.0
@@ -280,7 +280,7 @@ def test_a_failure_just_outside_is_measurement_error_not_a_contradiction():
 def test_without_a_reported_sigma_the_boundary_is_strict():
     """No stated uncertainty means no room to grant."""
     import pandas as pd
-    from lamxsim.labels.failure import FailureSet
+    from collective.labels import FailureSet
 
     fp = InspectionFootprint.from_rectangles([(0, 0, 1000, 1000)])
     table = pd.DataFrame({

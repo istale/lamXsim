@@ -3,10 +3,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from lamxsim import report
-from lamxsim.layout.reader import LayerSpec, LayoutReader
-from lamxsim.layout.synth import packaged_die
-from lamxsim.study import StudyManifest
+from collective import exposure as report
+from collective.layout import LayerSpec, LayoutReader
+from collective.layout import packaged_die
+from collective.study import StudyManifest
 
 MANIFEST = "config/study_manifest.yaml"
 
@@ -168,7 +168,7 @@ def test_a_protective_association_is_ranked_on_its_own_merits():
 
 def test_summary_states_what_the_result_is_not(tmp_path):
     df = pd.DataFrame([_row()])
-    paths = report.write(df, tmp_path, metadata={
+    paths = report.write_reports(df, tmp_path, metadata={
         "uncontrolled_confounding": ["no bump layer supplied"]})
     text = (tmp_path / "reports" / "README.md").read_text()
     assert "not a causal claim" in text

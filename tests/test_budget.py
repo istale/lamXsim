@@ -11,8 +11,8 @@ that any particular number comes out.
 import numpy as np
 import pytest
 
-from lamxsim import budget
-from lamxsim.study import StudyManifest
+from collective import workflow as budget
+from collective.study import StudyManifest
 
 from pathlib import Path
 

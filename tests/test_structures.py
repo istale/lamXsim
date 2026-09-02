@@ -9,10 +9,10 @@ import klayout.db as db
 import numpy as np
 import pytest
 
-from lamxsim.features.grid import build_grid
-from lamxsim.features.structures import StructureExtractor
-from lamxsim.layout import synth
-from lamxsim.layout.reader import LayerSpec, LayoutReader
+from collective.geometry import build_grid
+from collective.geometry import StructureExtractor
+from collective import layout as synth
+from collective.layout import LayerSpec, LayoutReader
 
 M8 = LayerSpec("M8", 8, 0)
 FILL = LayerSpec("M8_FILL", 8, 10)
@@ -118,7 +118,7 @@ def test_declared_fill_is_separated_from_functional_metal(tmp_path):
 
 
 def test_manifest_records_an_undeclared_fill_layer_as_a_gap(tmp_path):
-    from lamxsim.study import StudyManifest
+    from collective.study import StudyManifest
 
     p = tmp_path / "m.yaml"
     p.write_text(
