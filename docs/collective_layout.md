@@ -68,11 +68,46 @@ module level moved into the functions that use them:
   level, while `pipeline` imports `atlas` inside a function. The three are
   only used inside `build()`, so the import moved there.
 
-## What was not done
+## The tests
 
-The tests were not folded. They are 24 files organised by what they check,
-which is already the right unit for them, and merging them would make a
-failure harder to place rather than easier.
+Folded too, into seven files that mirror the modules: `collective/geometry.py`
+is checked by `collective/test_geometry.py`, and so on. They live beside the
+code rather than in a `tests/` tree, so an installed copy carries its own
+verification.
+
+| file | lines | folded from |
+|---|---:|---|
+| `test_workflow.py` | 473 | registration, budget, bump_relative_routing |
+| `test_geometry.py` | 559 | perimeter_clipping, section26_discrimination, lineend_definitions, structures, gradient_and_crosslayer |
+| `test_calibre.py` | 632 | calibre_band, calibre_crosscheck |
+| `test_statistics.py` | 849 | statistical_pipeline, spatial_significance, phase6_baseline, stratification_and_registry, multi_die_and_modes |
+| `test_objects.py` | 899 | object_shapes |
+| `test_labels.py` | 1,029 | inspection_footprint, via_corner_package, reference_frames, input_validation |
+| `test_exposure.py` | 1,091 | atlas, golden_run, workflow_and_report, conditions_and_budget |
+
+Thirteen top-level names collided. Eleven were identical -- `M8` was
+`LayerSpec("M8", 8, 0)` in thirteen files -- so one survives per file and the
+rest were dropped. Nine were genuinely different and were renamed with the
+suffix of the file they came from:
+
+| was | in | is now |
+|---|---|---|
+| `MANIFEST` | `test_atlas` | `MANIFEST_atlas` |
+| `MANIFEST` | `test_workflow_and_report` | `MANIFEST_workflow` |
+| `_row` | `test_conditions_and_budget` | `_row_conditions` |
+| `_row` | `test_workflow_and_report` | `_row_workflow` |
+| `die` | `test_phase6_baseline` | `die_phase6` |
+| `die` | `test_spatial_significance` | `die_spatial` |
+| `die` | `test_statistical_pipeline` | `die_statistical` |
+| `packaged` | `test_reference_frames` | `packaged_reference` |
+| `packaged` | `test_via_corner_package` | `packaged_via` |
+
+Five of those are pytest fixtures, which are requested by argument name rather
+than referenced as a symbol, so each rename had to reach the parameter list of
+every test that asked for the fixture. A missed one would not have raised: it
+would have silently bound a test to a different die.
+
+The golden regression data moved with them, to `collective/golden/`.
 
 Nothing was rewritten for style, and no behaviour changed. A diff of this
 branch against `main` should contain only moves, the twelve renames, the

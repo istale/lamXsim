@@ -30,8 +30,12 @@ lamxsim = "collective.workflow:main"
 [tool.setuptools.packages.find]
 include = ["collective*"]
 
+# The tests live inside the package, beside what they exercise. That is the
+# point of this layout, and it means they ship with it -- an installed copy
+# carries its own verification, at the cost of a little weight.
+
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["collective"]
 
 # Versions this suite has actually been run against. The upper bounds above
 # are declared rather than verified here: reproduce with these to get the

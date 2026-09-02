@@ -21,8 +21,10 @@ here will fix.
 > **This is the `collective` branch.** The code is the same as `main`, folded
 > from forty modules into ten files under `collective/`, with the test suite
 > as the check that the fold was faithful. `docs/collective_layout.md` maps
-> every file back to what it came from. Run things with `PYTHONPATH=.` and
-> `python3 -m collective` rather than `PYTHONPATH=src` and `-m lamxsim`.
+> every file back to what it came from. The tests are folded the same way,
+> into seven files that sit beside the modules they exercise, so `pytest`
+> alone runs them. Run the CLI with `PYTHONPATH=.` and `python3 -m collective`
+> rather than `PYTHONPATH=src` and `-m lamxsim`.
 
 ## Engineering interpretation
 
@@ -228,7 +230,7 @@ PYTHONPATH=. python3 -m collective thinslice --outdir results
 ```
 
 ```bash
-PYTHONPATH=. python3 -m pytest tests -q
+python3 -m pytest -q
 ```
 
 ## Phase 0: is the study feasible?
@@ -781,6 +783,12 @@ collective/
                   reports partitioned by what each row may claim
   workflow.py     registration and its scale gate, the correlation
                   pipeline, the cost model, and the command line
+
+  test_geometry.py ... test_workflow.py
+                  the suite, folded the same way and named after the file
+                  each one checks
+  golden/         the frozen regression study: a die, its manifest, and the
+                  conclusion it must keep reaching
 ```
 
 ## Deviations from the spec, and why

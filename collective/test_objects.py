@@ -1,3 +1,20 @@
+"""Per-object shape, before anything is averaged into a window.
+
+Folded from ``tests/test_object_shapes.py``.
+"""
+from collective import layout as synth
+from collective import objects as obj
+from collective.layout import BBox
+from collective.layout import LayerSpec
+from collective.layout import LayoutReader
+import math
+import numpy as np
+import pytest
+
+
+# ----------------------------------------------------------------------
+# test_object_shapes.py
+# ----------------------------------------------------------------------
 """Per-object shape descriptors, before anything is averaged into a window.
 
 Every other feature in this repository measures a window. That is the right
@@ -11,15 +28,6 @@ post-reflow bump, the printed opening, the assembled overlay, or any sidewall
 angle -- a GDS holds no Z information, so no vertical angle is derivable from
 it by any means.
 """
-import math
-
-import numpy as np
-import pytest
-
-from collective import objects as obj
-from collective.layout import BBox, LayerSpec, LayoutReader
-from collective import layout as synth
-
 DIE = BBox(0.0, 0.0, 200.0, 200.0)
 
 
